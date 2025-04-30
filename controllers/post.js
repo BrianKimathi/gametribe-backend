@@ -35,17 +35,28 @@ const createPost = async (req, res) => {
     const userData = userDoc.data();
     let imageUrl = "";
     if (req.file) {
-      const file = req.file;
-      const fileName = `${Date.now()}_${file.originalname}`;
-      const fileRef = storage.bucket().file(`posts/${fileName}`);
-      await fileRef.save(file.buffer, { contentType: file.mimetype });
-      imageUrl = await fileRef.getSignedUrl({
-        action: "read",
-        expires: "03-09-2491",
-      });
-      imageUrl = imageUrl[0];
+      try {
+        const file = req.file;
+        const fileName = `posts/${Date.now()}_${file.originalname}`;
+        const bucket = storage.bucket("gametibe2025.appspot.com"); // Explicit bucket name
+        const fileRef = bucket.file(fileName);
+        await fileRef.save(file.buffer, { contentType: file.mimetype });
+        const [url] = await fileRef.getSignedUrl({
+          action: "read",
+          expires: "03-09-2491",
+        });
+        imageUrl = url;
+      } catch (uploadError) {
+        console.error("Error uploading image to storage:", uploadError);
+        imageUrl = ""; // Continue without an image
+      }
     } else if (req.body.imageLink) {
       imageUrl = req.body.imageLink;
+    }
+
+    // Validate required fields
+    if (!req.body.content) {
+      return res.status(400).json({ error: "Post content is required" });
     }
 
     const newPost = {
@@ -143,15 +154,21 @@ const createComment = async (req, res) => {
     }
 
     if (req.file) {
-      const file = req.file;
-      const fileName = `${Date.now()}_${file.originalname}`;
-      const fileRef = storage.bucket().file(`comments/${fileName}`);
-      await fileRef.save(file.buffer, { contentType: file.mimetype });
-      attachmentUrl = await fileRef.getSignedUrl({
-        action: "read",
-        expires: "03-09-2491",
-      });
-      attachmentUrl = attachmentUrl[0];
+      try {
+        const file = req.file;
+        const fileName = `comments/${Date.now()}_${file.originalname}`;
+        const bucket = storage.bucket("gametibe2025.appspot.com");
+        const fileRef = bucket.file(fileName);
+        await fileRef.save(file.buffer, { contentType: file.mimetype });
+        const [url] = await fileRef.getSignedUrl({
+          action: "read",
+          expires: "03-09-2491",
+        });
+        attachmentUrl = url;
+      } catch (uploadError) {
+        console.error("Error uploading attachment to storage:", uploadError);
+        attachmentUrl = ""; // Continue without an attachment
+      }
     }
 
     const newComment = {
@@ -211,15 +228,21 @@ const createReply = async (req, res) => {
     }
 
     if (req.file) {
-      const file = req.file;
-      const fileName = `${Date.now()}_${file.originalname}`;
-      const fileRef = storage.bucket().file(`comments/${fileName}`);
-      await fileRef.save(file.buffer, { contentType: file.mimetype });
-      attachmentUrl = await fileRef.getSignedUrl({
-        action: "read",
-        expires: "03-09-2491",
-      });
-      attachmentUrl = attachmentUrl[0];
+      try {
+        const file = req.file;
+        const fileName = `comments/${Date.now()}_${file.originalname}`;
+        const bucket = storage.bucket("gametibe2025.appspot.com");
+        const fileRef = bucket.file(fileName);
+        await fileRef.save(file.buffer, { contentType: file.mimetype });
+        const [url] = await fileRef.getSignedUrl({
+          action: "read",
+          expires: "03-09-2491",
+        });
+        attachmentUrl = url;
+      } catch (uploadError) {
+        console.error("Error uploading attachment to storage:", uploadError);
+        attachmentUrl = ""; // Continue without an attachment
+      }
     }
 
     const newReply = {

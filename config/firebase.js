@@ -10,7 +10,7 @@ try {
 }
 
 // Validate environment variables
-const storageBucket = process.env.FIREBASE_STORAGE_BUCKET;
+const storageBucket = "gametibe2025.appspot.com";
 if (!storageBucket) {
   console.error("FIREBASE_STORAGE_BUCKET environment variable is not set.");
   process.exit(1); // Exit the process if the storage bucket is not set
