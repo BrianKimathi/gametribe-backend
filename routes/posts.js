@@ -10,6 +10,7 @@ const {
   createComment,
   createReply,
   likeComment,
+  likeReply,
 } = require("../controllers/post");
 
 const storage = multer.memoryStorage();
@@ -17,8 +18,7 @@ const upload = multer({ storage });
 
 router.get("/", getPosts);
 router.post("/", authenticate, upload.single("image"), createPost);
-router.put("/:id/like", authenticate, likePost);
-
+router.post("/:id/like", authenticate, likePost);
 router.get("/:postId/comments", getComments);
 router.post(
   "/:postId/comments",
@@ -53,6 +53,11 @@ router.put(
   "/:postId/comments/:commentId/replies/:replyId/like",
   authenticate,
   likeComment
+);
+router.put(
+  "/posts/:postId/comments/:commentId/replies/:replyId/like",
+  authenticate,
+  likeReply
 );
 
 module.exports = router;

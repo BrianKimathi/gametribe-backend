@@ -1,36 +1,62 @@
 const express = require("express");
 const router = express.Router();
+const multer = require("multer");
 const {
   getClans,
   createClan,
-  sendJoinRequest,
-  handleJoinRequest,
-  getJoinRequests,
+  joinClan,
+  getClanMembers,
   sendGroupMessage,
   getGroupMessages,
-  getDirectMessages,
   sendDirectMessage,
+  getDirectMessages,
   addClanPoints,
+  updateOnlineStatus,
+  getOnlineStatus,
+  getUserProfile,
+  syncPresence,
 } = require("../controllers/clans");
 const authenticate = require("../middleware/auth");
+
+const upload = multer({ storage: multer.memoryStorage() });
+
+// Debug logs to inspect imports
+console.log("Imported controllers:", {
+  getClans,
+  createClan,
+  joinClan,
+  getClanMembers,
+  sendGroupMessage,
+  getGroupMessages,
+  sendDirectMessage,
+  getDirectMessages,
+  addClanPoints,
+  updateOnlineStatus,
+  getOnlineStatus,
+  getUserProfile,
+  syncPresence,
+});
+console.log("Imported authenticate:", authenticate);
 
 // Fetch all clans
 router.get("/", getClans);
 
 // Create a new clan
-router.post("/", authenticate, createClan);
+router.post("/", authenticate, upload.single("logo"), createClan);
 
-// Send a join request
-router.post("/:id/join", authenticate, sendJoinRequest);
+// Join a clan (direct join for clans with <5 members)
+router.post("/:id/join", authenticate, joinClan);
 
-// Approve or reject a join request
-router.post("/:clanId/join/:userId", authenticate, handleJoinRequest);
-
-// Fetch join requests for a clan
-router.get("/:id/join-requests", authenticate, getJoinRequests);
+// Fetch clan members (for members only)
+router.get("/:id/members", authenticate, getClanMembers);
 
 // Send a group chat message
-router.post("/:id/messages", authenticate, sendGroupMessage);
+router.post(
+  "/:id/messages",
+  authenticate,
+  upload.single("attachment"),
+  sendGroupMessage
+);
 
 // Fetch group chat messages
 router.get("/:id/messages", authenticate, getGroupMessages);
@@ -43,9 +69,26 @@ router.get(
 );
 
 // Send a direct message
-router.post("/direct-messages", authenticate, sendDirectMessage);
+router.post(
+  "/direct-messages",
+  authenticate,
+  upload.single("attachment"),
+  sendDirectMessage
+);
 
 // Add points to a clan
 router.post("/:id/points", authenticate, addClanPoints);
+
+// Update online status
+router.post("/online-status", authenticate, updateOnlineStatus);
+
+// Get online status
+router.get("/online-status/:userId", authenticate, getOnlineStatus);
+
+// Sync presence
+router.post("/sync-presence", authenticate, syncPresence);
+
+// Get user profile
+router.get("/users/:userId", authenticate, getUserProfile);
 
 module.exports = router;
