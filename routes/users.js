@@ -12,7 +12,7 @@ const {
   updateUserStatus,
   syncPresence,
 } = require("../controllers/users");
-const authenticate = require("../middleware/auth"); // Import the function directly
+const authenticate = require("../middleware/auth");
 
 // Debug log to inspect imports
 console.log("Imported controllers:", {

@@ -1,5 +1,5 @@
 const admin = require("firebase-admin");
-const serviceAccount = require("../firebase-adminsdk.json");
+const serviceAccount = require("./firebase-adminsdk.json");
 
 try {
   const app = admin.initializeApp({
@@ -13,7 +13,6 @@ try {
   const storage = admin.storage();
   const database = admin.database();
 
-
   module.exports = { auth, db, storage, database };
 } catch (error) {
   console.error("config/firebase.js - Error initializing Firebase Admin SDK:", {
@@ -21,5 +20,5 @@ try {
     code: error.code,
     stack: error.stack,
   });
-  throw error; // Stop execution if initialization fails
+  throw error;
 }

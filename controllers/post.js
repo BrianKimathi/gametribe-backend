@@ -1,24 +1,32 @@
-const { db, storage } = require("../config/firebase");
+const { database, storage } = require("../config/firebase");
 const { v4: uuidv4 } = require("uuid");
-const admin = require("firebase-admin");
+
+// Sanitize input to prevent XSS or invalid data
+const sanitizeInput = (input) => {
+  if (typeof input !== "string") return input;
+  return input.replace(/[<>]/g, ""); // Basic XSS prevention
+};
 
 const getPosts = async (req, res) => {
   try {
     const userId = req.user?.uid;
-    const postsSnapshot = await db
-      .collection("posts")
-      .orderBy("createdAt", "desc")
-      .get();
-    const posts = postsSnapshot.docs.map((doc) => ({
-      id: doc.id,
-      ...doc.data(),
-      likes: doc.data().likes || 0,
-      likedBy: doc.data().likedBy || [],
-      liked: userId ? doc.data().likedBy?.includes(userId) || false : false,
+    const postsRef = database.ref("posts");
+    const snapshot = await postsRef.orderByChild("createdAt").once("value");
+    const postsData = snapshot.val() || {};
+    const posts = Object.entries(postsData).map(([id, data]) => ({
+      id,
+      ...data,
+      likes: data.likes || 0,
+      likedBy: Array.isArray(data.likedBy) ? data.likedBy : [], // Ensure array
+      liked:
+        userId && Array.isArray(data.likedBy)
+          ? data.likedBy.includes(userId)
+          : false,
     }));
+    posts.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     return res.status(200).json({ posts });
   } catch (error) {
-    console.error("Error fetching posts:", error);
+    console.error("Error fetching posts:", error.message, error.stack);
     return res.status(500).json({ error: "Failed to fetch posts" });
   }
 };
@@ -27,18 +35,28 @@ const createPost = async (req, res) => {
   try {
     const userId = req.user.uid;
     const { content, category, imageLink } = req.body;
-    if (!content) {
-      return res.status(400).json({ error: "Post content is required" });
+    if (
+      !content ||
+      typeof content !== "string" ||
+      content.trim().length === 0
+    ) {
+      return res.status(400).json({
+        error: "Post content is required and must be a non-empty string",
+      });
     }
-    const userRef = db.collection("users").doc(userId);
-    const userDoc = await userRef.get();
-    if (!userDoc.exists) {
+    const sanitizedContent = sanitizeInput(content);
+    const userRef = database.ref(`users/${userId}`);
+    const userSnapshot = await userRef.once("value");
+    if (!userSnapshot.exists()) {
       return res.status(404).json({ error: "User not found" });
     }
-    const userData = userDoc.data();
-    let imageUrl = imageLink || "";
+    const userData = userSnapshot.val();
+    let imageUrl = sanitizeInput(imageLink) || "";
     if (req.file) {
       const file = req.file;
+      if (!file.mimetype.startsWith("image/")) {
+        return res.status(400).json({ error: "Only image files are allowed" });
+      }
       const fileName = `posts/${Date.now()}-${file.originalname}`;
       const fileRef = storage.bucket().file(fileName);
       await fileRef.save(file.buffer, { contentType: file.mimetype });
@@ -47,184 +65,143 @@ const createPost = async (req, res) => {
         expires: "03-09-2491",
       });
     }
+    const postId = uuidv4();
     const newPost = {
       authorId: userId,
       author: userData.username || userData.email.split("@")[0],
       authorImage: userData.avatar || "",
-      content,
-      category,
+      content: sanitizedContent,
+      category: sanitizeInput(category) || "",
       image: imageUrl,
       createdAt: new Date().toISOString(),
       comments: 0,
-      likes: 0, // Initialize likes
-      likedBy: [], // Initialize likedBy
+      likes: 0,
+      likedBy: [],
     };
-    const docRef = await db.collection("posts").add(newPost);
-    return res.status(201).json({ id: docRef.id, ...newPost });
+    await database.ref(`posts/${postId}`).set(newPost);
+    return res.status(201).json({ id: postId, ...newPost });
   } catch (error) {
-    console.error("Error creating post:", error);
+    console.error("Error creating post:", error.message, error.stack);
     return res.status(500).json({ error: "Failed to create post" });
   }
 };
 
 const likePost = async (req, res) => {
   try {
-    console.log("Received like POST request:", {
-      url: req.originalUrl,
-      params: req.params,
-      userId: req.user.uid,
-    });
     const postId = req.params.id;
     const userId = req.user.uid;
-    if (!postId || typeof postId !== "string" || postId.trim() === "") {
-      console.error("Invalid or missing postId:", postId);
+    if (!postId) {
       return res.status(400).json({ error: "Post ID is required" });
     }
-    console.log(`Liking post ${postId} by user ${userId}`);
-    const postRef = db.collection("posts").doc(postId);
-    const result = await db.runTransaction(async (transaction) => {
-      const postDoc = await transaction.get(postRef);
-      if (!postDoc.exists) {
-        console.error(`Post not found: ${postId}`);
-        throw new Error("Post not found");
+    const postRef = database.ref(`posts/${postId}`);
+    const result = await postRef.transaction((postData) => {
+      if (!postData) {
+        return null; // Abort if post doesn't exist
       }
-      const postData = postDoc.data();
-      const likedBy = postData.likedBy || [];
+      const likedBy = Array.isArray(postData.likedBy) ? postData.likedBy : [];
       const likes = postData.likes || 0;
-      let newLikes = likes;
-      let isLiked = likedBy.includes(userId);
-      console.log(
-        `Current post state: likes=${likes}, likedBy=${likedBy}, isLiked=${isLiked}`
-      );
+      const isLiked = likedBy.includes(userId);
       if (isLiked) {
-        newLikes = likes > 0 ? likes - 1 : 0;
-        transaction.update(postRef, {
-          likes: newLikes,
-          likedBy: likedBy.filter((id) => id !== userId),
-        });
-        console.log(`Unliked: newLikes=${newLikes}, removed user ${userId}`);
+        postData.likes = likes > 0 ? likes - 1 : 0;
+        postData.likedBy = likedBy.filter((id) => id !== userId);
       } else {
-        newLikes = likes + 1;
-        transaction.update(postRef, {
-          likes: newLikes,
-          likedBy: [...likedBy, userId],
-        });
-        console.log(`Liked: newLikes=${newLikes}, added user ${userId}`);
+        postData.likes = likes + 1;
+        postData.likedBy = [...new Set([...likedBy, userId])]; // Prevent duplicates
       }
-      return { liked: !isLiked, likes: newLikes };
+      return postData;
     });
-    console.log(`Like operation successful: postId=${postId}, result=`, result);
-    return res.status(200).json(result);
+    if (!result.committed) {
+      return res.status(404).json({ error: "Post not found" });
+    }
+    const postData = result.snapshot.val();
+    return res.status(200).json({
+      liked: postData.likedBy.includes(userId),
+      likes: postData.likes,
+    });
   } catch (error) {
-    console.error("Error liking post:", {
-      postId: req.params.id || "undefined",
-      userId: req.user?.uid || "unknown",
-      message: error.message,
-      code: error.code,
-      stack: error.stack,
-    });
-    return res.status(error.message === "Post not found" ? 404 : 500).json({
-      error:
-        error.message === "Post not found"
-          ? "Post not found"
-          : "Failed to like post",
-    });
+    console.error("Error liking post:", error.message, error.stack);
+    return res.status(500).json({ error: "Failed to like post" });
   }
 };
 
 const getComments = async (req, res) => {
   try {
-    console.log("Received get comments request:", {
-      url: req.originalUrl,
-      params: req.params,
-    });
     const postId = req.params.postId;
-    if (!postId || typeof postId !== "string" || postId.trim() === "") {
-      console.error("Invalid or missing postId:", postId);
+    if (!postId) {
       return res.status(400).json({ error: "Post ID is required" });
     }
-    const postRef = db.collection("posts").doc(postId);
-    const postDoc = await postRef.get();
-    if (!postDoc.exists) {
-      console.error(`Post not found: ${postId}`);
+    const postRef = database.ref(`posts/${postId}`);
+    const postSnapshot = await postRef.once("value");
+    if (!postSnapshot.exists()) {
       return res.status(404).json({ error: "Post not found" });
     }
-    const commentsSnapshot = await db
-      .collection("posts")
-      .doc(postId)
-      .collection("comments")
-      .orderBy("createdAt", "desc")
-      .get();
+    const commentsRef = database.ref(`posts/${postId}/comments`);
+    const commentsSnapshot = await commentsRef
+      .orderByChild("createdAt")
+      .once("value");
+    const commentsData = commentsSnapshot.val() || {};
     const comments = [];
-    for (const doc of commentsSnapshot.docs) {
-      const commentData = { id: doc.id, ...doc.data() };
-      const repliesSnapshot = await db
-        .collection("posts")
-        .doc(postId)
-        .collection("comments")
-        .doc(doc.id)
-        .collection("replies")
-        .orderBy("createdAt", "desc")
-        .get();
-      commentData.replies = repliesSnapshot.docs.map((replyDoc) => ({
-        id: replyDoc.id,
-        ...replyDoc.data(),
-      }));
+    for (const [commentId, commentData] of Object.entries(commentsData)) {
+      const repliesRef = database.ref(
+        `posts/${postId}/comments/${commentId}/replies`
+      );
+      const repliesSnapshot = await repliesRef
+        .orderByChild("createdAt")
+        .once("value");
+      const repliesData = repliesSnapshot.val() || {};
+      commentData.id = commentId;
+      commentData.likes = commentData.likes || 0;
+      commentData.likedBy = Array.isArray(commentData.likedBy)
+        ? commentData.likedBy
+        : [];
+      commentData.replies = Object.entries(repliesData).map(
+        ([replyId, replyData]) => ({
+          id: replyId,
+          ...replyData,
+          likes: replyData.likes || 0,
+          likedBy: Array.isArray(replyData.likedBy) ? replyData.likedBy : [],
+        })
+      );
       comments.push(commentData);
     }
-    console.log(`Fetched comments for post ${postId}:`, comments);
+    comments.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     return res.status(200).json(comments);
   } catch (error) {
-    console.error("Error fetching comments:", {
-      postId: req.params.postId || "undefined",
-      message: error.message,
-      code: error.code,
-      stack: error.stack,
-    });
+    console.error("Error fetching comments:", error.message, error.stack);
     return res.status(500).json({ error: "Failed to fetch comments" });
   }
 };
 
 const createComment = async (req, res) => {
   try {
-    console.log("Received comment POST request:", {
-      url: req.originalUrl,
-      params: req.params,
-      body: req.body,
-      hasFile: !!req.file,
-    });
     const postId = req.params.postId;
     const userId = req.user.uid;
-    if (!postId || typeof postId !== "string" || postId.trim() === "") {
-      console.error("Invalid or missing postId:", postId);
+    if (!postId) {
       return res.status(400).json({ error: "Post ID is required" });
     }
-    console.log(`Creating comment for post ${postId} by user ${userId}`, {
-      content: req.body.content,
-      hasFile: !!req.file,
-    });
     if (!req.body.content && !req.file) {
-      console.error("Comment content or attachment missing");
       return res
         .status(400)
         .json({ error: "Comment content or attachment is required" });
     }
-    const postRef = db.collection("posts").doc(postId);
-    const postDoc = await postRef.get();
-    if (!postDoc.exists) {
-      console.error(`Post not found: ${postId}`);
+    const sanitizedContent = sanitizeInput(req.body.content) || "";
+    const postRef = database.ref(`posts/${postId}`);
+    const postSnapshot = await postRef.once("value");
+    if (!postSnapshot.exists()) {
       return res.status(404).json({ error: "Post not found" });
     }
-    const userRef = db.collection("users").doc(userId);
-    const userDoc = await userRef.get();
-    if (!userDoc.exists) {
-      console.error(`User not found: ${userId}`);
+    const userRef = database.ref(`users/${userId}`);
+    const userSnapshot = await userRef.once("value");
+    if (!userSnapshot.exists()) {
       return res.status(404).json({ error: "User not found" });
     }
-    const userData = userDoc.data();
+    const userData = userSnapshot.val();
     let attachmentUrl = "";
     if (req.file) {
       const file = req.file;
+      if (!file.mimetype.startsWith("image/")) {
+        return res.status(400).json({ error: "Only image files are allowed" });
+      }
       const fileName = `posts/${postId}/comments/${Date.now()}-${
         file.originalname
       }`;
@@ -234,108 +211,66 @@ const createComment = async (req, res) => {
         action: "read",
         expires: "03-09-2491",
       });
-      console.log("Uploaded attachment:", attachmentUrl);
     }
-    const commentId = db.collection("posts").doc().id;
-    if (
-      !commentId ||
-      typeof commentId !== "string" ||
-      commentId.trim() === ""
-    ) {
-      console.error("Failed to generate valid comment ID");
-      return res.status(500).json({ error: "Failed to generate comment ID" });
-    }
+    const commentId = uuidv4();
     const comment = {
       id: commentId,
       postId,
       authorId: userId,
       author: userData.username || userData.email.split("@")[0],
       authorImage: userData.avatar || "",
-      content: req.body.content || "",
+      content: sanitizedContent,
       attachment: attachmentUrl,
       likes: 0,
       likedBy: [],
       createdAt: new Date().toISOString(),
     };
-    console.log(
-      `Attempting to save comment: commentId=${commentId}, postId=${postId}`
-    );
-    await db
-      .collection("posts")
-      .doc(postId)
-      .collection("comments")
-      .doc(commentId)
-      .set(comment);
-    await postRef.update({ comments: admin.firestore.FieldValue.increment(1) });
-    console.log(`Comment created: commentId=${commentId}, postId=${postId}`);
+    await database.ref(`posts/${postId}/comments/${commentId}`).set(comment);
+    await postRef.update({ comments: (postSnapshot.val().comments || 0) + 1 });
     return res.status(201).json(comment);
   } catch (error) {
-    console.error("Error creating comment:", {
-      postId: req.params.postId || "undefined",
-      userId: req.user?.uid || "unknown",
-      message: error.message,
-      code: error.code,
-      stack: error.stack,
-    });
+    console.error("Error creating comment:", error.message, error.stack);
     return res.status(500).json({ error: "Failed to create comment" });
   }
 };
 
 const createReply = async (req, res) => {
   try {
-    console.log("Received reply POST request:", {
-      url: req.originalUrl,
-      params: req.params,
-      body: req.body,
-      hasFile: !!req.file,
-    });
     const { postId, commentId } = req.params;
     const userId = req.user.uid;
     if (!postId || !commentId) {
-      console.error("Missing postId or commentId:", { postId, commentId });
       return res
         .status(400)
         .json({ error: "Post ID and Comment ID are required" });
     }
-    console.log(
-      `Creating reply for comment ${commentId} on post ${postId} by user ${userId}`,
-      {
-        content: req.body.content,
-        hasFile: !!req.file,
-      }
-    );
     if (!req.body.content && !req.file) {
-      console.error("Reply content or attachment missing");
       return res
         .status(400)
         .json({ error: "Reply content or attachment is required" });
     }
-    const postRef = db.collection("posts").doc(postId);
-    const postDoc = await postRef.get();
-    if (!postDoc.exists) {
-      console.error(`Post not found: ${postId}`);
+    const sanitizedContent = sanitizeInput(req.body.content) || "";
+    const postRef = database.ref(`posts/${postId}`);
+    const postSnapshot = await postRef.once("value");
+    if (!postSnapshot.exists()) {
       return res.status(404).json({ error: "Post not found" });
     }
-    const commentRef = db
-      .collection("posts")
-      .doc(postId)
-      .collection("comments")
-      .doc(commentId);
-    const commentDoc = await commentRef.get();
-    if (!commentDoc.exists) {
-      console.error(`Comment not found: ${commentId}`);
+    const commentRef = database.ref(`posts/${postId}/comments/${commentId}`);
+    const commentSnapshot = await commentRef.once("value");
+    if (!commentSnapshot.exists()) {
       return res.status(404).json({ error: "Comment not found" });
     }
-    const userRef = db.collection("users").doc(userId);
-    const userDoc = await userRef.get();
-    if (!userDoc.exists) {
-      console.error(`User not found: ${userId}`);
+    const userRef = database.ref(`users/${userId}`);
+    const userSnapshot = await userRef.once("value");
+    if (!userSnapshot.exists()) {
       return res.status(404).json({ error: "User not found" });
     }
-    const userData = userDoc.data();
+    const userData = userSnapshot.val();
     let attachmentUrl = "";
     if (req.file) {
       const file = req.file;
+      if (!file.mimetype.startsWith("image/")) {
+        return res.status(400).json({ error: "Only image files are allowed" });
+      }
       const fileName = `posts/${postId}/comments/${commentId}/replies/${Date.now()}-${
         file.originalname
       }`;
@@ -345,13 +280,8 @@ const createReply = async (req, res) => {
         action: "read",
         expires: "03-09-2491",
       });
-      console.log("Uploaded attachment:", attachmentUrl);
     }
-    const replyId = db.collection("posts").doc().id;
-    if (!replyId || typeof replyId !== "string" || replyId.trim() === "") {
-      console.error("Failed to generate valid reply ID");
-      return res.status(500).json({ error: "Failed to generate reply ID" });
-    }
+    const replyId = uuidv4();
     const reply = {
       id: replyId,
       postId,
@@ -359,180 +289,104 @@ const createReply = async (req, res) => {
       authorId: userId,
       author: userData.username || userData.email.split("@")[0],
       authorImage: userData.avatar || "",
-      content: req.body.content || "",
+      content: sanitizedContent,
       attachment: attachmentUrl,
       likes: 0,
       likedBy: [],
       createdAt: new Date().toISOString(),
     };
-    console.log(
-      `Attempting to save reply: replyId=${replyId}, commentId=${commentId}, postId=${postId}`
-    );
-    await db
-      .collection("posts")
-      .doc(postId)
-      .collection("comments")
-      .doc(commentId)
-      .collection("replies")
-      .doc(replyId)
+    await database
+      .ref(`posts/${postId}/comments/${commentId}/replies/${replyId}`)
       .set(reply);
-    await postRef.update({ comments: admin.firestore.FieldValue.increment(1) });
-    console.log(
-      `Reply created: replyId=${replyId}, commentId=${commentId}, postId=${postId}`
-    );
+    await postRef.update({ comments: (postSnapshot.val().comments || 0) + 1 });
     return res.status(201).json(reply);
   } catch (error) {
-    console.error("Error creating reply:", {
-      postId: req.params.postId || "undefined",
-      commentId: req.params.commentId || "undefined",
-      userId: req.user?.uid || "unknown",
-      message: error.message,
-      code: error.code,
-      stack: error.stack,
-    });
+    console.error("Error creating reply:", error.message, error.stack);
     return res.status(500).json({ error: "Failed to create reply" });
   }
 };
 
 const likeComment = async (req, res) => {
   try {
-    console.log("Received like comment request:", {
-      url: req.originalUrl,
-      params: req.params,
-      userId: req.user.uid,
-    });
     const { postId, commentId } = req.params;
     const userId = req.user.uid;
     if (!postId || !commentId) {
-      console.error("Missing postId or commentId:", { postId, commentId });
       return res
         .status(400)
         .json({ error: "Post ID and Comment ID are required" });
     }
-    console.log(
-      `Liking comment ${commentId} on post ${postId} by user ${userId}`
-    );
-    const commentRef = db
-      .collection("posts")
-      .doc(postId)
-      .collection("comments")
-      .doc(commentId);
-    const result = await db.runTransaction(async (transaction) => {
-      const commentDoc = await transaction.get(commentRef);
-      if (!commentDoc.exists) {
-        console.error(`Comment not found: ${commentId}`);
-        throw new Error("Comment not found");
+    const commentRef = database.ref(`posts/${postId}/comments/${commentId}`);
+    const result = await commentRef.transaction((commentData) => {
+      if (!commentData) {
+        return null; // Abort if comment doesn't exist
       }
-      const commentData = commentDoc.data();
-      const likedBy = commentData.likedBy || [];
+      const likedBy = Array.isArray(commentData.likedBy)
+        ? commentData.likedBy
+        : [];
       const likes = commentData.likes || 0;
-      if (likedBy.includes(userId)) {
-        console.log(`User ${userId} has already liked comment ${commentId}`);
-        return { liked: true, likes }; // No change
+      const isLiked = likedBy.includes(userId);
+      if (isLiked) {
+        commentData.likes = likes > 0 ? likes - 1 : 0;
+        commentData.likedBy = likedBy.filter((id) => id !== userId);
+      } else {
+        commentData.likes = likes + 1;
+        commentData.likedBy = [...new Set([...likedBy, userId])]; // Prevent duplicates
       }
-      const newLikes = likes + 1;
-      transaction.update(commentRef, {
-        likes: newLikes,
-        likedBy: [...likedBy, userId],
-      });
-      console.log(
-        `Liked comment: commentId=${commentId}, newLikes=${newLikes}, added user ${userId}`
-      );
-      return { liked: true, likes: newLikes };
+      return commentData;
     });
-    console.log(
-      `Like comment successful: commentId=${commentId}, result=`,
-      result
-    );
-    return res.status(200).json(result);
+    if (!result.committed) {
+      return res.status(404).json({ error: "Comment not found" });
+    }
+    const commentData = result.snapshot.val();
+    return res.status(200).json({
+      liked: commentData.likedBy.includes(userId),
+      likes: commentData.likes,
+    });
   } catch (error) {
-    console.error("Error liking comment:", {
-      postId: req.params.postId || "undefined",
-      commentId: req.params.commentId || "undefined",
-      userId: req.user?.uid || "unknown",
-      message: error.message,
-      code: error.code,
-      stack: error.stack,
-    });
-    return res.status(error.message === "Comment not found" ? 404 : 500).json({
-      error:
-        error.message === "Comment not found"
-          ? "Comment not found"
-          : "Failed to like comment",
-    });
+    console.error("Error liking comment:", error.message, error.stack);
+    return res.status(500).json({ error: "Failed to like comment" });
   }
 };
 
 const likeReply = async (req, res) => {
   try {
-    console.log("Received like reply request:", {
-      url: req.originalUrl,
-      params: req.params,
-      userId: req.user.uid,
-    });
     const { postId, commentId, replyId } = req.params;
     const userId = req.user.uid;
     if (!postId || !commentId || !replyId) {
-      console.error("Missing postId, commentId, or replyId:", {
-        postId,
-        commentId,
-        replyId,
-      });
       return res
         .status(400)
         .json({ error: "Post ID, Comment ID, and Reply ID are required" });
     }
-    console.log(
-      `Liking reply ${replyId} on comment ${commentId} by user ${userId}`
+    const replyRef = database.ref(
+      `posts/${postId}/comments/${commentId}/replies/${replyId}`
     );
-    const replyRef = db
-      .collection("posts")
-      .doc(postId)
-      .collection("comments")
-      .doc(commentId)
-      .collection("replies")
-      .doc(replyId);
-    const result = await db.runTransaction(async (transaction) => {
-      const replyDoc = await transaction.get(replyRef);
-      if (!replyDoc.exists) {
-        console.error(`Reply not found: ${replyId}`);
-        throw new Error("Reply not found");
+    const result = await replyRef.transaction((replyData) => {
+      if (!replyData) {
+        return null; // Abort if reply doesn't exist
       }
-      const replyData = replyDoc.data();
-      const likedBy = replyData.likedBy || [];
+      const likedBy = Array.isArray(replyData.likedBy) ? replyData.likedBy : [];
       const likes = replyData.likes || 0;
-      if (likedBy.includes(userId)) {
-        console.log(`User ${userId} has already liked reply ${replyId}`);
-        return { liked: true, likes }; // No change
+      const isLiked = likedBy.includes(userId);
+      if (isLiked) {
+        replyData.likes = likes > 0 ? likes - 1 : 0;
+        replyData.likedBy = likedBy.filter((id) => id !== userId);
+      } else {
+        replyData.likes = likes + 1;
+        replyData.likedBy = [...new Set([...likedBy, userId])]; // Prevent duplicates
       }
-      const newLikes = likes + 1;
-      transaction.update(replyRef, {
-        likes: newLikes,
-        likedBy: [...likedBy, userId],
-      });
-      console.log(
-        `Liked reply: replyId=${replyId}, newLikes=${newLikes}, added user ${userId}`
-      );
-      return { liked: true, likes: newLikes };
+      return replyData;
     });
-    console.log(`Like reply successful: replyId=${replyId}, result=`, result);
-    return res.status(200).json(result);
+    if (!result.committed) {
+      return res.status(404).json({ error: "Reply not found" });
+    }
+    const replyData = result.snapshot.val();
+    return res.status(200).json({
+      liked: replyData.likedBy.includes(userId),
+      likes: replyData.likes,
+    });
   } catch (error) {
-    console.error("Error liking reply:", {
-      postId: req.params.postId || "undefined",
-      commentId: req.params.commentId || "undefined",
-      replyId: req.params.replyId || "undefined",
-      userId: req.user?.uid || "unknown",
-      message: error.message,
-      code: error.code,
-      stack: error.stack,
-    });
-    return res.status(error.message === "Reply not found" ? 404 : 500).json({
-      error:
-        error.message === "Reply not found"
-          ? "Reply not found"
-          : "Failed to like reply",
-    });
+    console.error("Error liking reply:", error.message, error.stack);
+    return res.status(500).json({ error: "Failed to like reply" });
   }
 };
 

@@ -52,11 +52,6 @@ router.put("/:postId/comments/:commentId/like", authenticate, likeComment);
 router.put(
   "/:postId/comments/:commentId/replies/:replyId/like",
   authenticate,
-  likeComment
-);
-router.put(
-  "/posts/:postId/comments/:commentId/replies/:replyId/like",
-  authenticate,
   likeReply
 );
 
