@@ -9,7 +9,7 @@ const stripe = new Stripe("");
 // M-Pesa credentials
 const MPESA_CONSUMER_KEY = "";
 const MPESA_CONSUMER_SECRET = "";
-const MPESA_SHORTCODE = "174379"; // Replace with your actual shortcode
+const MPESA_SHORTCODE = ""; // Replace with your actual shortcode
 const MPESA_PASSKEY = ""; // Replace with your actual passkey
 
 // Sanitize input to prevent XSS or invalid data
