@@ -6,6 +6,7 @@ const postsRouter = require("./routes/posts");
 const clansRouter = require("./routes/clans");
 const usersRouter = require("./routes/users");
 const eventsRouter = require("./routes/events");
+const paymentRouter = require("./routes/payment");
 
 dotenv.config();
 
@@ -37,6 +38,7 @@ app.use("/api/posts", postsRouter);
 app.use("/api/clans", clansRouter);
 app.use("/api/users", usersRouter);
 app.use("/api/events", eventsRouter);
+app.use("/api/payments", paymentRouter);
 
 app.get("/api/test", (req, res) => {
   res.json({ message: "API is working" });
@@ -60,6 +62,6 @@ const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(
-    `Registered routes: /api/posts, /api/clans, /api/users, /api/events`
+    `Registered routes: /api/posts, /api/clans, /api/users, /api/events, /api/payments`
   );
 });
