@@ -1,10 +1,22 @@
 const { database, storage } = require("../config/firebase");
 const { v4: uuidv4 } = require("uuid");
+const DOMPurify = require("dompurify");
+const { JSDOM } = require("jsdom");
+const window = new JSDOM("").window;
+const purify = DOMPurify(window);
 
-// Sanitize input to prevent XSS or invalid data
+// Sanitize input to prevent XSS or invalid data and remove unnecessary HTML tags
 const sanitizeInput = (input) => {
   if (typeof input !== "string") return input;
-  return input.replace(/[<>]/g, ""); // Basic XSS prevention
+  // Sanitize and remove <p> tags if they are the only wrapper
+  let sanitized = purify.sanitize(input, {
+    ALLOWED_TAGS: ["b", "i", "u", "strong", "em"],
+  });
+  // Remove wrapping <p> tags if they enclose the entire content
+  if (sanitized.startsWith("<p>") && sanitized.endsWith("</p>")) {
+    sanitized = sanitized.slice(3, -4).trim();
+  }
+  return sanitized;
 };
 
 const getPosts = async (req, res) => {
@@ -17,7 +29,7 @@ const getPosts = async (req, res) => {
       id,
       ...data,
       likes: data.likes || 0,
-      likedBy: Array.isArray(data.likedBy) ? data.likedBy : [], // Ensure array
+      likedBy: Array.isArray(data.likedBy) ? data.likedBy : [],
       liked:
         userId && Array.isArray(data.likedBy)
           ? data.likedBy.includes(userId)
@@ -96,7 +108,7 @@ const likePost = async (req, res) => {
     const postRef = database.ref(`posts/${postId}`);
     const result = await postRef.transaction((postData) => {
       if (!postData) {
-        return null; // Abort if post doesn't exist
+        return null;
       }
       const likedBy = Array.isArray(postData.likedBy) ? postData.likedBy : [];
       const likes = postData.likes || 0;
@@ -106,7 +118,7 @@ const likePost = async (req, res) => {
         postData.likedBy = likedBy.filter((id) => id !== userId);
       } else {
         postData.likes = likes + 1;
-        postData.likedBy = [...new Set([...likedBy, userId])]; // Prevent duplicates
+        postData.likedBy = [...new Set([...likedBy, userId])];
       }
       return postData;
     });
@@ -318,7 +330,7 @@ const likeComment = async (req, res) => {
     const commentRef = database.ref(`posts/${postId}/comments/${commentId}`);
     const result = await commentRef.transaction((commentData) => {
       if (!commentData) {
-        return null; // Abort if comment doesn't exist
+        return null;
       }
       const likedBy = Array.isArray(commentData.likedBy)
         ? commentData.likedBy
@@ -330,7 +342,7 @@ const likeComment = async (req, res) => {
         commentData.likedBy = likedBy.filter((id) => id !== userId);
       } else {
         commentData.likes = likes + 1;
-        commentData.likedBy = [...new Set([...likedBy, userId])]; // Prevent duplicates
+        commentData.likedBy = [...new Set([...likedBy, userId])];
       }
       return commentData;
     });
@@ -362,7 +374,7 @@ const likeReply = async (req, res) => {
     );
     const result = await replyRef.transaction((replyData) => {
       if (!replyData) {
-        return null; // Abort if reply doesn't exist
+        return null;
       }
       const likedBy = Array.isArray(replyData.likedBy) ? replyData.likedBy : [];
       const likes = replyData.likes || 0;
@@ -372,7 +384,7 @@ const likeReply = async (req, res) => {
         replyData.likedBy = likedBy.filter((id) => id !== userId);
       } else {
         replyData.likes = likes + 1;
-        replyData.likedBy = [...new Set([...likedBy, userId])]; // Prevent duplicates
+        replyData.likedBy = [...new Set([...likedBy, userId])];
       }
       return replyData;
     });
