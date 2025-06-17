@@ -1,22 +1,28 @@
-const { database, storage } = require("../config/firebase");
+const { database } = require("../config/firebase");
+const {
+  ref,
+  get,
+  update,
+  query,
+  orderByChild,
+  equalTo,
+} = require("firebase/database");
 const { v4: uuidv4 } = require("uuid");
 const Stripe = require("stripe");
 const axios = require("axios");
+require("dotenv").config();
 
-// Initialize Stripe with hardcoded secret key
-const stripe = new Stripe(
-  "sk_test_51RV7sc4CUfqU3hx8AgfyRjHvdNFQBYtQy69Sotq2p0WijBkKque6zxu2uLvenAfzGll8tHBSNYFXZ5i1Ki8Yfwj100kvHQApGV"
-);
+// Initialize Stripe
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 // M-Pesa credentials
-const MPESA_CONSUMER_KEY = "erQnAIqD2oPUbsiQ2FGXv9mLUEiDBRsQKgfOG8akhHpl9FOF";
-const MPESA_CONSUMER_SECRET =
-  "eCxVfajTfU7rfHU4B1UTFBP1nKW1TGqvaHZRMRFuK3aFCTm90DnUe3C8ajoTCwT4";
-const MPESA_SHORTCODE = "174379"; // Replace with your actual shortcode
-const MPESA_PASSKEY =
-  "bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c919"; // Replace with your actual passkey
+const MPESA_CONSUMER_KEY = process.env.MPESA_CONSUMER_KEY;
+const MPESA_CONSUMER_SECRET = process.env.MPESA_CONSUMER_SECRET;
+const MPESA_SHORTCODE = process.env.MPESA_SHORTCODE;
+const MPESA_PASSKEY = process.env.MPESA_PASSKEY;
+const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
-// Sanitize input to prevent XSS or invalid data
+// Sanitize input
 const sanitizeInput = (input) => {
   if (typeof input !== "string") return input;
   return input.replace(/[<>]/g, "");
@@ -30,15 +36,14 @@ const getMpesaToken = async () => {
     ).toString("base64");
     const response = await axios.get(
       "https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials",
-      {
-        headers: {
-          Authorization: `Basic ${auth}`,
-        },
-      }
+      { headers: { Authorization: `Basic ${auth}` } }
     );
     return response.data.access_token;
   } catch (error) {
-    console.error("Error generating M-Pesa token:", error.message, error.stack);
+    console.error("Error generating M-Pesa token:", {
+      message: error.message,
+      stack: error.stack,
+    });
     throw new Error("Failed to generate M-Pesa token");
   }
 };
@@ -56,21 +61,21 @@ const createStripePayment = async (req, res) => {
       return res.status(400).json({ error: "User ID is required" });
     }
 
-    const userRef = database.ref(`users/${userId}`);
-    const userSnapshot = await userRef.once("value");
-    if (!userSnapshot.exists()) {
+    const userRef = ref(database, `users/${userId}`);
+    const paymentUserSnapshot = await get(userRef);
+    if (!paymentUserSnapshot.exists()) {
       return res.status(404).json({ error: "User not found" });
     }
 
+    const transactionId = uuidv4();
     const paymentIntent = await stripe.paymentIntents.create({
-      amount: amount * 100, // Convert to cents
+      amount: amount * 100,
       currency: "kes",
       payment_method_types: ["card"],
-      metadata: { userId },
+      metadata: { userId, transactionId },
     });
 
-    const transactionId = uuidv4();
-    await database.ref(`transactions/${transactionId}`).set({
+    await update(ref(database, `transactions/${transactionId}`), {
       id: transactionId,
       userId,
       type: "deposit",
@@ -87,7 +92,10 @@ const createStripePayment = async (req, res) => {
       transactionId,
     });
   } catch (error) {
-    console.error("Error creating Stripe payment:", error.message, error.stack);
+    console.error("Error creating Stripe payment:", {
+      message: error.message,
+      stack: error.stack,
+    });
     return res.status(500).json({ error: "Failed to create Stripe payment" });
   }
 };
@@ -96,10 +104,10 @@ const createStripePayment = async (req, res) => {
 const createMpesaPayment = async (req, res) => {
   try {
     const { amount, phoneNumber, userId } = req.body;
-    if (!amount || amount < 100 || amount > 10000) {
+    if (!amount || amount < 1 || amount > 10000) {
       return res
         .status(400)
-        .json({ error: "Amount must be between KSH 100 and KSH 10,000" });
+        .json({ error: "Amount must be between KSH 1 and KSH 10,000" });
     }
     if (!phoneNumber || !phoneNumber.match(/^\+254[0-9]{9}$/)) {
       return res.status(400).json({
@@ -110,9 +118,9 @@ const createMpesaPayment = async (req, res) => {
       return res.status(400).json({ error: "User ID is required" });
     }
 
-    const userRef = database.ref(`users/${userId}`);
-    const userSnapshot = await userRef.once("value");
-    if (!userSnapshot.exists()) {
+    const userRef = ref(database, `users/${userId}`);
+    const mpesaUserSnapshot = await get(userRef);
+    if (!mpesaUserSnapshot.exists()) {
       return res.status(404).json({ error: "User not found" });
     }
 
@@ -136,20 +144,15 @@ const createMpesaPayment = async (req, res) => {
         PartyA: phoneNumber.replace("+", ""),
         PartyB: MPESA_SHORTCODE,
         PhoneNumber: phoneNumber.replace("+", ""),
-        CallBackURL:
-          "https://1908-37-19-199-135.ngrok-free.app/api/payments/mpesa/webhook", // Replace with your actual domain
+        CallBackURL: process.env.MPESA_CALLBACK_URL,
         AccountReference: `GameTribe_${userId}`,
         TransactionDesc: "Deposit to GameTribe Wallet",
       },
-      {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      }
+      { headers: { Authorization: `Bearer ${token}` } }
     );
 
     const transactionId = uuidv4();
-    await database.ref(`transactions/${transactionId}`).set({
+    await update(ref(database, `transactions/${transactionId}`), {
       id: transactionId,
       userId,
       type: "deposit",
@@ -161,57 +164,125 @@ const createMpesaPayment = async (req, res) => {
       createdAt: new Date().toISOString(),
     });
 
+    console.log(
+      `Created M-Pesa transaction: ID=${transactionId}, CheckoutRequestID=${response.data.CheckoutRequestID}`
+    );
+
     return res.status(200).json({
       transactionId,
       checkoutRequestId: response.data.CheckoutRequestID,
     });
   } catch (error) {
-    console.error("Error creating M-Pesa payment:", error.message, error.stack);
+    console.error("Error creating M-Pesa payment:", {
+      message: error.message,
+      stack: error.stack,
+    });
     return res.status(500).json({ error: "Failed to create M-Pesa payment" });
   }
 };
 
 // Stripe webhook handler
 const stripeWebhook = async (req, res) => {
+  console.log("Received POST /api/payments/stripe/webhook");
   const sig = req.headers["stripe-signature"];
-  const webhookSecret =
-    process.env.STRIPE_WEBHOOK_SECRET || "whsec_test_secret"; // Replace with your actual webhook secret
 
   try {
     const event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
+    console.log(`Processing Stripe webhook event: ${event.id} (${event.type})`);
 
-    if (event.type === "payment_intent.succeeded") {
-      const paymentIntent = event.data.object;
-      const transactionId = paymentIntent.metadata.transactionId;
-      const userId = paymentIntent.metadata.userId;
+    const eventRef = ref(database, `webhook_events/${event.id}`);
+    const eventSnapshot = await get(eventRef);
+    if (eventSnapshot.exists()) {
+      console.log(`Event ${event.id} already processed`);
+      return res.status(200).json({ received: true });
+    }
 
-      const transactionRef = database.ref(`transactions/${transactionId}`);
-      const transactionSnapshot = await transactionRef.once("value");
-      if (!transactionSnapshot.exists()) {
-        return res.status(404).json({ error: "Transaction not found" });
-      }
+    await update(eventRef, {
+      processed: true,
+      type: event.type,
+      createdAt: new Date().toISOString(),
+    });
 
-      await transactionRef.update({
-        status: "completed",
-        updatedAt: new Date().toISOString(),
-      });
+    switch (event.type) {
+      case "payment_intent.succeeded":
+        const paymentIntent = event.data.object;
+        const { transactionId, userId } = paymentIntent.metadata;
 
-      const userRef = database.ref(`users/${userId}`);
-      const userSnapshot = await userRef.once("value");
-      if (userSnapshot.exists()) {
-        const userData = userSnapshot.val();
-        const newBalance = (userData.balance || 0) + paymentIntent.amount / 100;
-        await userRef.update({ balance: newBalance });
-      }
+        if (!transactionId || !userId) {
+          console.warn(
+            "Missing transactionId or userId in payment intent metadata"
+          );
+          return res.status(200).json({ received: true });
+        }
+
+        const transactionRef = ref(database, `transactions/${transactionId}`);
+        const transactionSnapshot = await get(transactionRef);
+        if (!transactionSnapshot.exists()) {
+          console.warn(`Transaction ${transactionId} not found`);
+          return res.status(404).json({ error: "Transaction not found" });
+        }
+
+        const transaction = transactionSnapshot.val();
+        if (transaction.status === "completed") {
+          console.log(`Transaction ${transactionId} already completed`);
+          return res.status(200).json({ received: true });
+        }
+
+        await update(transactionRef, {
+          status: "completed",
+          updatedAt: new Date().toISOString(),
+        });
+
+        const paymentUserRef = ref(database, `users/${userId}`);
+        const paymentUserSnapshot = await get(paymentUserRef);
+        if (paymentUserSnapshot.exists()) {
+          const currentBalance = paymentUserSnapshot.val().balance || 0;
+          const newBalance = currentBalance + paymentIntent.amount / 100;
+          await update(paymentUserRef, { balance: newBalance });
+          console.log(`Updated balance for user ${userId}: KSH ${newBalance}`);
+        }
+        break;
+
+      case "customer.subscription.created":
+      case "customer.subscription.updated":
+      case "customer.subscription.deleted":
+        const subscription = event.data.object;
+        const subscriptionStatus = subscription.status;
+        const subscriptionId = subscription.id;
+        const customerId = subscription.customer;
+        console.log(
+          `Subscription ${subscriptionId} ${event.type} with status ${subscriptionStatus}`
+        );
+
+        const subscriptionUserQuery = ref(database, "users");
+        const subscriptionUserSnapshot = await get(
+          query(
+            subscriptionUserQuery,
+            orderByChild("stripeCustomerId"),
+            equalTo(customerId)
+          )
+        );
+        if (subscriptionUserSnapshot.exists()) {
+          const subUserId = Object.keys(subscriptionUserSnapshot.val())[0];
+          await update(ref(database, `users/${subUserId}`), {
+            subscriptionId,
+            subscriptionStatus,
+            updatedAt: new Date().toISOString(),
+          });
+          console.log(`Updated subscription for user ${subUserId}`);
+        }
+        break;
+
+      default:
+        console.log(`Unhandled event type ${event.type}`);
     }
 
     return res.status(200).json({ received: true });
   } catch (error) {
-    console.error(
-      "Error processing Stripe webhook:",
-      error.message,
-      error.stack
-    );
+    console.error("Error processing Stripe webhook:", {
+      message: error.message,
+      stack: error.stack,
+    });
     return res.status(400).json({ error: "Webhook error" });
   }
 };
@@ -269,7 +340,6 @@ const mpesaWebhook = async (req, res) => {
     return res.status(500).json({ error: "Webhook error" });
   }
 };
-
 module.exports = {
   createStripePayment,
   createMpesaPayment,
