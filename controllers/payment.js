@@ -184,6 +184,9 @@ const createMpesaPayment = async (req, res) => {
 // Stripe webhook handler
 const stripeWebhook = async (req, res) => {
   console.log("Received POST /api/payments/stripe/webhook");
+  console.log("Stripe signature:", req.headers["stripe-signature"]);
+  console.log("Webhook payload length:", req.body.length);
+
   const sig = req.headers["stripe-signature"];
 
   try {
@@ -286,6 +289,7 @@ const stripeWebhook = async (req, res) => {
     return res.status(400).json({ error: "Webhook error" });
   }
 };
+
 
 // M-Pesa webhook handler
 const mpesaWebhook = async (req, res) => {
