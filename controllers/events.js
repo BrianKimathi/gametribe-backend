@@ -1,27 +1,9 @@
 const { database, storage } = require("../config/firebase");
-const multer = require("multer");
-const path = require("path");
+const { v4: uuidv4 } = require("uuid");
 const sanitizeHtml = require("sanitize-html");
 
-// Configure multer for in-memory storage (used in routes/events.js)
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
-  fileFilter: (req, file, cb) => {
-    const filetypes = /jpeg|jpg|png/;
-    const extname = filetypes.test(
-      path.extname(file.originalname).toLowerCase()
-    );
-    const mimetype = filetypes.test(file.mimetype);
-    if (extname && mimetype) {
-      return cb(null, true);
-    }
-    cb(new Error("Only JPEG/PNG images are allowed"));
-  },
-});
-
 // Sanitize HTML input
-const sanitizeDescription = (html) => {
+const sanitizeInput = (html) => {
   return sanitizeHtml(html, {
     allowedTags: ["p", "b", "i", "em", "strong", "a", "ul", "ol", "li", "br"],
     allowedAttributes: {
@@ -32,10 +14,6 @@ const sanitizeDescription = (html) => {
 
 const createEvent = async (req, res, next) => {
   try {
-    console.log("createEvent called with body:", req.body);
-    console.log("File:", req.file);
-    console.log("User:", req.user);
-
     const { title, description, startDate, endDate, imageUrl, category } =
       req.body;
     const userId = req.user.uid;
@@ -48,7 +26,7 @@ const createEvent = async (req, res, next) => {
 
     const eventData = {
       title,
-      description: sanitizeDescription(description),
+      description: sanitizeInput(description),
       startDate,
       endDate: endDate || null,
       image: imageUrl || null,
@@ -60,7 +38,6 @@ const createEvent = async (req, res, next) => {
     };
 
     if (req.file) {
-      console.log("Uploading image:", req.file);
       const fileName = `events/${Date.now()}_${req.file.originalname}`;
       const fileRef = storage.bucket().file(fileName);
       await fileRef.save(req.file.buffer, {
@@ -79,12 +56,12 @@ const createEvent = async (req, res, next) => {
 
     res.status(201).json({ id: newEventRef.key, ...eventData });
   } catch (error) {
-    console.error("Error in createEvent:", error);
+    console.error("Error in createEvent:", error.message, error.stack);
     next(error);
   }
 };
 
-const getEvents = async (req, res) => {
+const getEvents = async (req, res, next) => {
   try {
     const snapshot = await database.ref("events").once("value");
     const events = snapshot.val() || {};
@@ -95,12 +72,12 @@ const getEvents = async (req, res) => {
     }));
     res.status(200).json(eventsArray);
   } catch (error) {
-    console.error("Error fetching events:", error);
+    console.error("Error fetching events:", error.message, error.stack);
     res.status(500).json({ error: "Failed to fetch events" });
   }
 };
 
-const getEventById = async (req, res) => {
+const getEventById = async (req, res, next) => {
   try {
     const { id } = req.params;
     const snapshot = await database.ref(`events/${id}`).once("value");
@@ -114,16 +91,13 @@ const getEventById = async (req, res) => {
       bookingCount: event.bookings ? Object.keys(event.bookings).length : 0,
     });
   } catch (error) {
-    console.error("Error fetching event:", error);
+    console.error("Error fetching event:", error.message, error.stack);
     res.status(500).json({ error: "Failed to fetch event" });
   }
 };
 
 const updateEvent = async (req, res, next) => {
   try {
-    console.log("updateEvent called with body:", req.body);
-    console.log("File:", req.file);
-    console.log("User:", req.user);
     const { id } = req.params;
     const { title, description, startDate, endDate, imageUrl, category } =
       req.body;
@@ -142,7 +116,6 @@ const updateEvent = async (req, res, next) => {
         .json({ error: "Unauthorized: Only the author can update this event" });
     }
 
-    // Validate and format dates
     let start, end;
     if (startDate) {
       start = new Date(startDate);
@@ -182,7 +155,7 @@ const updateEvent = async (req, res, next) => {
 
     const updates = {};
     if (title) updates.title = title;
-    if (description) updates.description = sanitizeDescription(description);
+    if (description) updates.description = sanitizeInput(description);
     if (startDate) updates.startDate = start.toISOString();
     if (endDate !== undefined) updates.endDate = end ? end.toISOString() : null;
     if (image !== undefined) updates.image = image;
@@ -191,7 +164,7 @@ const updateEvent = async (req, res, next) => {
     await eventRef.set({ ...event, ...updates });
     res.status(200).json({ id, ...event, ...updates });
   } catch (error) {
-    console.error("Error updating event:", error);
+    console.error("Error updating event:", error.message, error.stack);
     next(error);
   }
 };
@@ -214,7 +187,6 @@ const deleteEvent = async (req, res, next) => {
         .json({ error: "Unauthorized: Only the author can delete this event" });
     }
 
-    // Optionally delete image from Storage if it exists
     if (event.image) {
       try {
         const filePath = event.image.match(/events%2F([^?]+)/)?.[1];
@@ -225,14 +197,14 @@ const deleteEvent = async (req, res, next) => {
             .delete();
         }
       } catch (error) {
-        console.warn("Error deleting image:", error);
+        console.warn("Error deleting image:", error.message);
       }
     }
 
     await eventRef.remove();
     res.status(200).json({ message: "Event deleted successfully" });
   } catch (error) {
-    console.error("Error deleting event:", error);
+    console.error("Error deleting event:", error.message, error.stack);
     next(error);
   }
 };
@@ -265,7 +237,7 @@ const bookEvent = async (req, res, next) => {
 
     res.status(200).json({ message: "Event booked successfully" });
   } catch (error) {
-    console.error("Error booking event:", error);
+    console.error("Error booking event:", error.message, error.stack);
     next(error);
   }
 };
@@ -285,7 +257,7 @@ const cancelBooking = async (req, res, next) => {
     await bookingRef.remove();
     res.status(200).json({ message: "Booking cancelled successfully" });
   } catch (error) {
-    console.error("Error cancelling booking:", error);
+    console.error("Error cancelling booking:", error.message, error.stack);
     next(error);
   }
 };
@@ -314,19 +286,272 @@ const getEventBookings = async (req, res, next) => {
 
     res.status(200).json(bookingsWithUsers);
   } catch (error) {
-    console.error("Error fetching bookings:", error);
+    console.error("Error fetching bookings:", error.message, error.stack);
     next(error);
   }
 };
 
-// Export controllers without multer for updateEvent
+const getEventComments = async (req, res, next) => {
+  try {
+    const { eventId } = req.params;
+    if (!eventId) {
+      return res.status(400).json({ error: "Event ID is required" });
+    }
+    const eventRef = database.ref(`events/${eventId}`);
+    const eventSnapshot = await eventRef.once("value");
+    if (!eventSnapshot.exists()) {
+      return res.status(404).json({ error: "Event not found" });
+    }
+    const commentsRef = database.ref(`events/${eventId}/comments`);
+    const commentsSnapshot = await commentsRef
+      .orderByChild("createdAt")
+      .once("value");
+    const commentsData = commentsSnapshot.val() || {};
+    const comments = [];
+    for (const [commentId, commentData] of Object.entries(commentsData)) {
+      const repliesRef = database.ref(
+        `events/${eventId}/comments/${commentId}/replies`
+      );
+      const repliesSnapshot = await repliesRef
+        .orderByChild("createdAt")
+        .once("value");
+      const repliesData = repliesSnapshot.val() || {};
+      commentData.id = commentId;
+      commentData.likes = commentData.likes || 0;
+      commentData.likedBy = Array.isArray(commentData.likedBy)
+        ? commentData.likedBy
+        : [];
+      commentData.replies = Object.entries(repliesData).map(
+        ([replyId, replyData]) => ({
+          id: replyId,
+          ...replyData,
+          likes: replyData.likes || 0,
+          likedBy: Array.isArray(replyData.likedBy) ? replyData.likedBy : [],
+        })
+      );
+      comments.push(commentData);
+    }
+    comments.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    res.status(200).json(comments);
+  } catch (error) {
+    console.error("Error fetching event comments:", error.message, error.stack);
+    res.status(500).json({ error: "Failed to fetch comments" });
+  }
+};
+
+const createEventComment = async (req, res, next) => {
+  try {
+    const { eventId } = req.params;
+    const userId = req.user.uid;
+    if (!eventId) {
+      return res.status(400).json({ error: "Event ID is required" });
+    }
+    if (!req.body.content && !req.file) {
+      return res
+        .status(400)
+        .json({ error: "Comment content or attachment is required" });
+    }
+    const sanitizedContent = sanitizeInput(req.body.content) || "";
+    const eventRef = database.ref(`events/${eventId}`);
+    const eventSnapshot = await eventRef.once("value");
+    if (!eventSnapshot.exists()) {
+      return res.status(404).json({ error: "Event not found" });
+    }
+    const userRef = database.ref(`users/${userId}`);
+    const userSnapshot = await userRef.once("value");
+    if (!userSnapshot.exists()) {
+      return res.status(404).json({ error: "User not found" });
+    }
+    const userData = userSnapshot.val();
+    let attachmentUrl = "";
+    if (req.file) {
+      const file = req.file;
+      if (!file.mimetype.startsWith("image/")) {
+        return res.status(400).json({ error: "Only image files are allowed" });
+      }
+      const fileName = `events/${eventId}/comments/${Date.now()}-${
+        file.originalname
+      }`;
+      const fileRef = storage.bucket().file(fileName);
+      await fileRef.save(file.buffer, { contentType: file.mimetype });
+      [attachmentUrl] = await fileRef.getSignedUrl({
+        action: "read",
+        expires: "03-01-2500",
+      });
+    }
+    const commentId = uuidv4();
+    const comment = {
+      id: commentId,
+      eventId,
+      authorId: userId,
+      author: userData.username || userData.email.split("@")[0],
+      authorImage: userData.avatar || "",
+      content: sanitizedContent,
+      attachment: attachmentUrl,
+      likes: 0,
+      likedBy: [],
+      createdAt: new Date().toISOString(),
+    };
+    await database.ref(`events/${eventId}/comments/${commentId}`).set(comment);
+    await eventRef.update({
+      comments: (eventSnapshot.val().comments || 0) + 1,
+    });
+    res.status(201).json(comment);
+  } catch (error) {
+    console.error("Error creating event comment:", error.message, error.stack);
+    res.status(500).json({ error: "Failed to create comment" });
+  }
+};
+
+const createEventReply = async (req, res, next) => {
+  try {
+    const { eventId, commentId } = req.params;
+    const userId = req.user.uid;
+    if (!eventId || !commentId) {
+      return res
+        .status(400)
+        .json({ error: "Event ID and Comment ID are required" });
+    }
+    if (!req.body.content && !req.file) {
+      return res
+        .status(400)
+        .json({ error: "Reply content or attachment is required" });
+    }
+    const sanitizedContent = sanitizeInput(req.body.content) || "";
+    const eventRef = database.ref(`events/${eventId}`);
+    const eventSnapshot = await eventRef.once("value");
+    if (!eventSnapshot.exists()) {
+      return res.status(404).json({ error: "Event not found" });
+    }
+    const commentRef = database.ref(`events/${eventId}/comments/${commentId}`);
+    const commentSnapshot = await commentRef.once("value");
+    if (!commentSnapshot.exists()) {
+      return res.status(404).json({ error: "Comment not found" });
+    }
+    const userRef = database.ref(`users/${userId}`);
+    const userSnapshot = await userRef.once("value");
+    if (!userSnapshot.exists()) {
+      return res.status(404).json({ error: "User not found" });
+    }
+    const userData = userSnapshot.val();
+    let attachmentUrl = "";
+    if (req.file) {
+      const file = req.file;
+      if (!file.mimetype.startsWith("image/")) {
+        return res.status(400).json({ error: "Only image files are allowed" });
+      }
+      const fileName = `events/${eventId}/comments/${commentId}/replies/${Date.now()}-${
+        file.originalname
+      }`;
+      const fileRef = storage.bucket().file(fileName);
+      await fileRef.save(file.buffer, { contentType: file.mimetype });
+      [attachmentUrl] = await fileRef.getSignedUrl({
+        action: "read",
+        expires: "03-01-2500",
+      });
+    }
+    const replyId = uuidv4();
+    const reply = {
+      id: replyId,
+      eventId,
+      commentId,
+      authorId: userId,
+      author: userData.username || userData.email.split("@")[0],
+      authorImage: userData.avatar || "",
+      content: sanitizedContent,
+      attachment: attachmentUrl,
+      likes: 0,
+      likedBy: [],
+      createdAt: new Date().toISOString(),
+    };
+    await database
+      .ref(`events/${eventId}/comments/${commentId}/replies/${replyId}`)
+      .set(reply);
+    res.status(201).json(reply);
+  } catch (error) {
+    console.error("Error creating event reply:", error.message, error.stack);
+    res.status(500).json({ error: "Failed to create reply" });
+  }
+};
+
+const likeEventComment = async (req, res, next) => {
+  try {
+    const { eventId, commentId } = req.params;
+    const userId = req.user.uid;
+    if (!eventId || !commentId) {
+      return res
+        .status(400)
+        .json({ error: "Event ID and Comment ID are required" });
+    }
+    const commentRef = database.ref(`events/${eventId}/comments/${commentId}`);
+    const commentSnapshot = await commentRef.once("value");
+    if (!commentSnapshot.exists()) {
+      return res.status(404).json({ error: "Comment not found" });
+    }
+    const commentData = commentSnapshot.val();
+    let likes = commentData.likes || 0;
+    let likedBy = Array.isArray(commentData.likedBy) ? commentData.likedBy : [];
+    if (likedBy.includes(userId)) {
+      likes = Math.max(likes - 1, 0);
+      likedBy = likedBy.filter((uid) => uid !== userId);
+    } else {
+      likes += 1;
+      likedBy.push(userId);
+    }
+    await commentRef.update({ likes, likedBy });
+    res.status(200).json({ message: "Comment like updated", likes, likedBy });
+  } catch (error) {
+    console.error("Error liking event comment:", error.message, error.stack);
+    res.status(500).json({ error: "Failed to update comment like" });
+  }
+};
+
+const likeEventReply = async (req, res, next) => {
+  try {
+    const { eventId, commentId, replyId } = req.params;
+    const userId = req.user.uid;
+    if (!eventId || !commentId || !replyId) {
+      return res
+        .status(400)
+        .json({ error: "Event ID, Comment ID, and Reply ID are required" });
+    }
+    const replyRef = database.ref(
+      `events/${eventId}/comments/${commentId}/replies/${replyId}`
+    );
+    const replySnapshot = await replyRef.once("value");
+    if (!replySnapshot.exists()) {
+      return res.status(404).json({ error: "Reply not found" });
+    }
+    const replyData = replySnapshot.val();
+    let likes = replyData.likes || 0;
+    let likedBy = Array.isArray(replyData.likedBy) ? replyData.likedBy : [];
+    if (likedBy.includes(userId)) {
+      likes = Math.max(likes - 1, 0);
+      likedBy = likedBy.filter((uid) => uid !== userId);
+    } else {
+      likes += 1;
+      likedBy.push(userId);
+    }
+    await replyRef.update({ likes, likedBy });
+    res.status(200).json({ message: "Reply like updated", likes, likedBy });
+  } catch (error) {
+    console.error("Error liking event reply:", error.message, error.stack);
+    res.status(500).json({ error: "Failed to update reply like" });
+  }
+};
+
 module.exports = {
   createEvent,
   getEvents,
   getEventById,
-  updateEvent, // Multer moved to routes/events.js
+  updateEvent,
   deleteEvent,
   bookEvent,
   cancelBooking,
   getEventBookings,
+  getEventComments,
+  createEventComment,
+  createEventReply,
+  likeEventComment,
+  likeEventReply,
 };
