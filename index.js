@@ -29,6 +29,7 @@ app.use(
 );
 
 // Define Stripe webhook route FIRST with raw parser
+// Stripe webhook route FIRST
 app.post(
   "/api/payments/stripe/webhook",
   express.raw({ type: "application/json" }),

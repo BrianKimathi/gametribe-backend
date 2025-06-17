@@ -186,6 +186,7 @@ const stripeWebhook = async (req, res) => {
   console.log("Received POST /api/payments/stripe/webhook");
   console.log("Stripe signature:", req.headers["stripe-signature"]);
   console.log("Webhook payload length:", req.body.length);
+  console.log("Webhook secret used:", webhookSecret ? "Set" : "Undefined");
 
   const sig = req.headers["stripe-signature"];
 
@@ -193,7 +194,7 @@ const stripeWebhook = async (req, res) => {
     const event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
     console.log(`Processing Stripe webhook event: ${event.id} (${event.type})`);
 
-    const eventRef = ref(database, `webhook_events/${event.id}`);
+    const eventRef = ref(database, `webhook_events/stripe_${event.id}`);
     const eventSnapshot = await get(eventRef);
     if (eventSnapshot.exists()) {
       console.log(`Event ${event.id} already processed`);
@@ -286,12 +287,19 @@ const stripeWebhook = async (req, res) => {
       message: error.message,
       stack: error.stack,
     });
+    // Store failed payload for debugging
+    const errorId = uuidv4();
+    await update(ref(database, `webhook_errors/stripe_${errorId}`), {
+      error: error.message,
+      signature: sig,
+      payloadLength: req.body.length,
+      timestamp: new Date().toISOString(),
+    });
     return res.status(400).json({ error: "Webhook error" });
   }
 };
 
-
-// M-Pesa webhook handler
+// M-Pesa webhook handler (unchanged as requested)
 const mpesaWebhook = async (req, res) => {
   try {
     const { Body } = req.body;
@@ -344,6 +352,7 @@ const mpesaWebhook = async (req, res) => {
     return res.status(500).json({ error: "Webhook error" });
   }
 };
+
 module.exports = {
   createStripePayment,
   createMpesaPayment,
