@@ -15,6 +15,8 @@ const {
   getOnlineStatus,
   getUserProfile,
   syncPresence,
+  createAnnouncement,
+  getAnnouncements,
 } = require("../controllers/clans");
 const authenticate = require("../middleware/auth");
 
@@ -35,6 +37,8 @@ console.log("Imported controllers:", {
   getOnlineStatus,
   getUserProfile,
   syncPresence,
+  createAnnouncement,
+  getAnnouncements,
 });
 console.log("Imported authenticate:", authenticate);
 
@@ -90,5 +94,51 @@ router.post("/sync-presence", authenticate, syncPresence);
 
 // Get user profile
 router.get("/users/:userId", authenticate, getUserProfile);
+
+// Direct Message Routes
+router.post(
+  "/messages/direct",
+  authenticate,
+  upload.single("attachment"),
+  sendDirectMessage
+);
+router.get(
+  "/messages/direct/:userId1/:userId2",
+  authenticate,
+  getDirectMessages
+);
+
+// Create an announcement
+router.post(
+  "/:id/announcements",
+  authenticate,
+  upload.single("attachment"),
+  (req, res, next) => {
+    console.log(`Handling POST /api/clans/${req.params.id}/announcements`);
+    console.log("Authenticated user:", req.user);
+    console.log("Request body:", req.body);
+    console.log("Request file:", req.file);
+    next();
+  },
+  createAnnouncement
+);
+
+// Fetch announcements
+router.get(
+  "/:id/announcements",
+  authenticate,
+  (req, res, next) => {
+    console.log(`Handling GET /api/clans/${req.params.id}/announcements`);
+    console.log("Authenticated user:", req.user);
+    next();
+  },
+  getAnnouncements
+);
+
+// Error Handling
+router.use((err, req, res, next) => {
+  console.error("Server error in clans router:", err);
+  res.status(500).json({ error: "Internal server error" });
+});
 
 module.exports = router;

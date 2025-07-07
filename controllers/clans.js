@@ -9,8 +9,9 @@ const getClans = async (req, res) => {
     const clans = Object.entries(clansData).map(([id, data]) => ({
       id,
       ...data,
-      members: data.members || [],
-      points: data.points || [],
+      members: Array.isArray(data.members) ? data.members : [],
+      points: Array.isArray(data.points) ? data.points : [],
+      createdAt: data.createdAt || new Date().toISOString(),
     }));
     clans.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     return res.status(200).json(clans);
@@ -26,6 +27,9 @@ const createClan = async (req, res) => {
     if (!name || !slogan) {
       return res.status(400).json({ error: "Name and slogan are required" });
     }
+    if (typeof name !== "string" || typeof slogan !== "string") {
+      return res.status(400).json({ error: "Invalid name or slogan format" });
+    }
     const userId = req.user.uid;
     const userRef = database.ref(`users/${userId}`);
     const userSnapshot = await userRef.once("value");
@@ -33,9 +37,17 @@ const createClan = async (req, res) => {
       return res.status(404).json({ error: "User not found" });
     }
     const userData = userSnapshot.val();
-    let logoUrl = "";
+    let logoUrl = "https://via.placeholder.com/40";
     if (req.file) {
       const file = req.file;
+      if (!file.mimetype.startsWith("image/")) {
+        return res.status(400).json({ error: "Logo must be an image" });
+      }
+      if (file.size > 5 * 1024 * 1024) {
+        return res
+          .status(400)
+          .json({ error: "Logo size must be less than 5MB" });
+      }
       const fileName = `clans/${Date.now()}-${file.originalname}`;
       const fileRef = storage.bucket().file(fileName);
       await fileRef.save(file.buffer, { contentType: file.mimetype });
@@ -46,13 +58,13 @@ const createClan = async (req, res) => {
     }
     const clanId = uuidv4();
     const newClan = {
-      name,
-      slogan,
+      name: name.trim(),
+      slogan: slogan.trim(),
       logo: logoUrl,
       adminId: userId,
       admin: userData.username || userData.email.split("@")[0],
       members: [{ userId, joinedAt: new Date().toISOString() }],
-      maxMembers: 5,
+      maxMembers: 50,
       isFull: false,
       points: [],
       createdAt: new Date().toISOString(),
@@ -78,10 +90,13 @@ const joinClan = async (req, res) => {
       return res.status(404).json({ error: "Clan not found" });
     }
     const clanData = clanSnapshot.val();
+    if (!Array.isArray(clanData.members)) {
+      clanData.members = [];
+    }
     if (clanData.members.some((member) => member.userId === userId)) {
       return res.status(400).json({ error: "You are already a member" });
     }
-    if (clanData.members.length >= clanData.maxMembers) {
+    if (clanData.members.length >= (clanData.maxMembers || 50)) {
       return res.status(400).json({ error: "Clan is full" });
     }
     const newMembers = [
@@ -90,10 +105,13 @@ const joinClan = async (req, res) => {
     ];
     await clanRef.update({
       members: newMembers,
-      isFull: newMembers.length >= clanData.maxMembers,
+      isFull: newMembers.length >= (clanData.maxMembers || 50),
     });
     const userRef = database.ref(`users/${userId}`);
     const userSnapshot = await userRef.once("value");
+    if (!userSnapshot.exists()) {
+      return res.status(404).json({ error: "User not found" });
+    }
     const userData = userSnapshot.val();
     await userRef.update({
       clans: [...(userData.clans || []), clanId],
@@ -115,7 +133,10 @@ const getClanMembers = async (req, res) => {
       return res.status(404).json({ error: "Clan not found" });
     }
     const clanData = clanSnapshot.val();
-    if (!clanData.members.some((member) => member.userId === userId)) {
+    if (
+      !Array.isArray(clanData.members) ||
+      !clanData.members.some((member) => member.userId === userId)
+    ) {
       return res
         .status(403)
         .json({ error: "You are not a member of this clan" });
@@ -129,12 +150,18 @@ const getClanMembers = async (req, res) => {
         members.push({
           id: member.userId,
           username: userData.username || userData.email.split("@")[0],
-          avatar: userData.avatar || "",
+          avatar: userData.avatar || "https://via.placeholder.com/40",
           joinedAt: member.joinedAt,
+          points: userData.points || 0,
+          country: userData.country || "US",
         });
       }
     }
-    return res.status(200).json(members);
+    return res
+      .status(200)
+      .json(
+        members.sort((a, b) => new Date(a.joinedAt) - new Date(b.joinedAt))
+      );
   } catch (error) {
     console.error("Error fetching clan members:", error);
     return res.status(500).json({ error: "Failed to fetch clan members" });
@@ -152,7 +179,10 @@ const sendGroupMessage = async (req, res) => {
       return res.status(404).json({ error: "Clan not found" });
     }
     const clan = clanSnapshot.val();
-    if (!clan.members.some((member) => member.userId === userId)) {
+    if (
+      !Array.isArray(clan.members) ||
+      !clan.members.some((member) => member.userId === userId)
+    ) {
       return res
         .status(403)
         .json({ error: "You are not a member of this clan" });
@@ -165,6 +195,14 @@ const sendGroupMessage = async (req, res) => {
     let attachmentUrl = "";
     if (req.file) {
       const file = req.file;
+      if (!file.mimetype.startsWith("image/")) {
+        return res.status(400).json({ error: "Attachment must be an image" });
+      }
+      if (file.size > 5 * 1024 * 1024) {
+        return res
+          .status(400)
+          .json({ error: "Attachment size must be less than 5MB" });
+      }
       const fileName = `clans/${clanId}/messages/${Date.now()}-${
         file.originalname
       }`;
@@ -179,13 +217,15 @@ const sendGroupMessage = async (req, res) => {
     const newMessageRef = messagesRef.push();
     const userRef = database.ref(`users/${userId}`);
     const userSnapshot = await userRef.once("value");
-    const senderName = userSnapshot.exists()
-      ? userSnapshot.val().username || userSnapshot.val().email.split("@")[0]
-      : "Unknown";
+    const userData = userSnapshot.val();
+    const senderName =
+      userData?.username || userData?.email.split("@")[0] || "Unknown";
+    const senderAvatar = userData?.avatar || "https://via.placeholder.com/40";
     const message = {
       id: newMessageRef.key,
       senderId: userId,
       sender: senderName,
+      senderAvatar,
       content: content || "",
       attachment: attachmentUrl,
       sentAt: Date.now(),
@@ -208,7 +248,10 @@ const getGroupMessages = async (req, res) => {
       return res.status(404).json({ error: "Clan not found" });
     }
     const clan = clanSnapshot.val();
-    if (!clan.members.some((member) => member.userId === userId)) {
+    if (
+      !Array.isArray(clan.members) ||
+      !clan.members.some((member) => member.userId === userId)
+    ) {
       return res
         .status(403)
         .json({ error: "You are not a member of this clan" });
@@ -234,8 +277,16 @@ const sendDirectMessage = async (req, res) => {
     }
     let attachmentUrl = "";
     if (req.file) {
-      const chatId = [senderId, recipientId].sort().join("_");
       const file = req.file;
+      if (!file.mimetype.startsWith("image/")) {
+        return res.status(400).json({ error: "Attachment must be an image" });
+      }
+      if (file.size > 5 * 1024 * 1024) {
+        return res
+          .status(400)
+          .json({ error: "Attachment size must be less than 5MB" });
+      }
+      const chatId = [senderId, recipientId].sort().join("_");
       const fileName = `directMessages/${chatId}/${Date.now()}-${
         file.originalname
       }`;
@@ -251,13 +302,15 @@ const sendDirectMessage = async (req, res) => {
     const newMessageRef = messagesRef.push();
     const userRef = database.ref(`users/${senderId}`);
     const userSnapshot = await userRef.once("value");
-    const senderName = userSnapshot.exists()
-      ? userSnapshot.val().username || userSnapshot.val().email.split("@")[0]
-      : "Unknown";
+    const userData = userSnapshot.val();
+    const senderName =
+      userData?.username || userData?.email.split("@")[0] || "Unknown";
+    const senderAvatar = userData?.avatar || "https://via.placeholder.com/40";
     const message = {
       id: newMessageRef.key,
       senderId,
       sender: senderName,
+      senderAvatar,
       content,
       attachment: attachmentUrl,
       sentAt: Date.now(),
@@ -307,7 +360,7 @@ const addClanPoints = async (req, res) => {
       return res.status(403).json({ error: "Only the admin can add points" });
     }
     await clanRef.update({
-      points: [...(clan.points || []), points],
+      points: [...(Array.isArray(clan.points) ? clan.points : []), points],
     });
     return res.status(200).json({ message: "Points added successfully" });
   } catch (error) {
@@ -357,8 +410,13 @@ const getUserProfile = async (req, res) => {
         uid: userId,
         email: req.user.email,
         username: req.user.email.split("@")[0],
-        avatar: "",
+        avatar: "https://via.placeholder.com/40",
         createdAt: new Date().toISOString(),
+        clans: [],
+        friendsCount: 0,
+        points: 0,
+        wallet: { amount: 0, currency: "KES" },
+        pointsConverted: false,
       };
       await userRef.set(newUser);
       return res.status(200).json(newUser);
@@ -395,6 +453,106 @@ const syncPresence = async (req, res) => {
   }
 };
 
+const createAnnouncement = async (req, res) => {
+  try {
+    console.log("Creating announcement for clan:", req.params.id);
+    console.log("User ID:", req.user.uid);
+    console.log("Request body:", req.body);
+    console.log("Request file:", req.file);
+    const clanId = req.params.id;
+    const userId = req.user.uid;
+    const { content } = req.body;
+    const clanRef = database.ref(`clans/${clanId}`);
+    const clanSnapshot = await clanRef.once("value");
+    if (!clanSnapshot.exists()) {
+      return res.status(404).json({ error: "Clan not found" });
+    }
+    const clan = clanSnapshot.val();
+    if (clan.adminId !== userId) {
+      return res
+        .status(403)
+        .json({ error: "Only the clan admin can create announcements" });
+    }
+    if (!content && !req.file) {
+      return res
+        .status(400)
+        .json({ error: "Content or attachment is required" });
+    }
+    let attachmentUrl = "";
+    if (req.file) {
+      const file = req.file;
+      if (!file.mimetype.startsWith("image/")) {
+        return res.status(400).json({ error: "Attachment must be an image" });
+      }
+      if (file.size > 5 * 1024 * 1024) {
+        return res
+          .status(400)
+          .json({ error: "Attachment size must be less than 5MB" });
+      }
+      const fileName = `clans/${clanId}/announcements/${Date.now()}-${
+        file.originalname
+      }`;
+      const fileRef = storage.bucket().file(fileName);
+      await fileRef.save(file.buffer, { contentType: file.mimetype });
+      [attachmentUrl] = await fileRef.getSignedUrl({
+        action: "read",
+        expires: "03-09-2491",
+      });
+    }
+    const announcementsRef = database.ref(`clans/${clanId}/announcements`);
+    const newAnnouncementRef = announcementsRef.push();
+    const userRef = database.ref(`users/${userId}`);
+    const userSnapshot = await userRef.once("value");
+    const userData = userSnapshot.val();
+    const senderName =
+      userData?.username || userData?.email.split("@")[0] || "Unknown";
+    const senderAvatar = userData?.avatar || "https://via.placeholder.com/40";
+    const announcement = {
+      id: newAnnouncementRef.key,
+      senderId: userId,
+      sender: senderName,
+      senderAvatar,
+      content: content || "",
+      attachment: attachmentUrl,
+      createdAt: Date.now(),
+    };
+    await newAnnouncementRef.set(announcement);
+    return res.status(201).json(announcement);
+  } catch (error) {
+    console.error("Error creating announcement:", error);
+    return res.status(500).json({ error: "Failed to create announcement" });
+  }
+};
+
+const getAnnouncements = async (req, res) => {
+  try {
+    console.log("Fetching announcements for clan:", req.params.id);
+    const clanId = req.params.id;
+    const userId = req.user.uid;
+    const clanRef = database.ref(`clans/${clanId}`);
+    const clanSnapshot = await clanRef.once("value");
+    if (!clanSnapshot.exists()) {
+      return res.status(404).json({ error: "Clan not found" });
+    }
+    const clan = clanSnapshot.val();
+    if (
+      !Array.isArray(clan.members) ||
+      !clan.members.some((member) => member.userId === userId)
+    ) {
+      return res
+        .status(403)
+        .json({ error: "You are not a member of this clan" });
+    }
+    return res.status(200).json({
+      path: `clans/${clanId}/announcements`,
+      message: "Use Firebase Realtime Database to listen for announcements",
+    });
+  } catch (error) {
+    console.error("Error fetching announcements:", error);
+    return res.status(500).json({ error: "Failed to fetch announcements" });
+  }
+};
+
 module.exports = {
   getClans,
   createClan,
@@ -409,4 +567,6 @@ module.exports = {
   getOnlineStatus,
   getUserProfile,
   syncPresence,
+  createAnnouncement,
+  getAnnouncements,
 };

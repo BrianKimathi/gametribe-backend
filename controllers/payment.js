@@ -28,6 +28,23 @@ const sanitizeInput = (input) => {
   return input.replace(/[<>]/g, "");
 };
 
+// Retry mechanism for database updates
+const updateWithRetry = async (ref, data, retries = 3) => {
+  for (let i = 0; i < retries; i++) {
+    try {
+      await update(ref, data);
+      return;
+    } catch (error) {
+      console.error(`Retry ${i + 1} failed for update:`, {
+        message: error.message,
+        stack: error.stack,
+      });
+      if (i === retries - 1) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+  }
+};
+
 // Generate M-Pesa OAuth token
 const getMpesaToken = async () => {
   try {
@@ -51,14 +68,19 @@ const getMpesaToken = async () => {
 // Create Stripe payment intent
 const createStripePayment = async (req, res) => {
   try {
-    const { amount, userId } = req.body;
-    if (!amount || amount < 100 || amount > 10000) {
-      return res
-        .status(400)
-        .json({ error: "Amount must be between KSH 100 and KSH 10,000" });
+    const { amount, userId, currency = "kes" } = req.body;
+    if (
+      !amount ||
+      amount < 100 ||
+      amount > 10000 ||
+      !Number.isInteger(amount)
+    ) {
+      return res.status(400).json({
+        error: "Amount must be an integer between 100 and 10,000",
+      });
     }
-    if (!userId) {
-      return res.status(400).json({ error: "User ID is required" });
+    if (!userId || typeof userId !== "string") {
+      return res.status(400).json({ error: "Valid User ID is required" });
     }
 
     const userRef = ref(database, `users/${userId}`);
@@ -68,33 +90,46 @@ const createStripePayment = async (req, res) => {
     }
 
     const transactionId = uuidv4();
+    const pointsToAdd = parseInt(amount); // 1 unit = 1 point, regardless of currency
+    const stripeAmount =
+      currency.toLowerCase() === "kes" ? amount * 100 : amount * 100; // Adjust for Stripe (cents)
     const paymentIntent = await stripe.paymentIntents.create({
-      amount: amount * 100,
-      currency: "kes",
+      amount: stripeAmount,
+      currency: currency.toLowerCase(),
       payment_method_types: ["card"],
-      metadata: { userId, transactionId },
+      metadata: { userId, transactionId, pointsToAdd: pointsToAdd.toString() },
     });
 
-    await update(ref(database, `transactions/${transactionId}`), {
+    await updateWithRetry(ref(database, `transactions/${transactionId}`), {
       id: transactionId,
       userId,
       type: "deposit",
       method: "stripe",
       amount,
-      currency: "KES",
+      currency: currency.toUpperCase(),
       status: "pending",
       paymentIntentId: paymentIntent.id,
+      pointsToAdd,
       createdAt: new Date().toISOString(),
     });
+
+    console.log(
+      `Created Stripe transaction: ID=${transactionId}, UserID=${userId}, Currency=${currency}, Points=${pointsToAdd}`
+    );
 
     return res.status(200).json({
       clientSecret: paymentIntent.client_secret,
       transactionId,
+      pointsToAdd,
     });
   } catch (error) {
     console.error("Error creating Stripe payment:", {
       message: error.message,
       stack: error.stack,
+    });
+    await updateWithRetry(ref(database, `webhook_errors/stripe_${uuidv4()}`), {
+      error: `Failed to create Stripe payment: ${error.message}`,
+      timestamp: new Date().toISOString(),
     });
     return res.status(500).json({ error: "Failed to create Stripe payment" });
   }
@@ -103,19 +138,19 @@ const createStripePayment = async (req, res) => {
 // Create M-Pesa STK Push payment
 const createMpesaPayment = async (req, res) => {
   try {
-    const { amount, phoneNumber, userId } = req.body;
-    if (!amount || amount < 1 || amount > 10000) {
-      return res
-        .status(400)
-        .json({ error: "Amount must be between KSH 1 and KSH 10,000" });
+    const { amount, phoneNumber, userId, currency = "KES" } = req.body;
+    if (!amount || amount < 1 || amount > 10000 || !Number.isInteger(amount)) {
+      return res.status(400).json({
+        error: "Amount must be an integer between 1 and 10,000",
+      });
     }
     if (!phoneNumber || !phoneNumber.match(/^\+254[0-9]{9}$/)) {
       return res.status(400).json({
         error: "Valid phone number is required (e.g., +254712345678)",
       });
     }
-    if (!userId) {
-      return res.status(400).json({ error: "User ID is required" });
+    if (!userId || typeof userId !== "string") {
+      return res.status(400).json({ error: "Valid User ID is required" });
     }
 
     const userRef = ref(database, `users/${userId}`);
@@ -124,6 +159,7 @@ const createMpesaPayment = async (req, res) => {
       return res.status(404).json({ error: "User not found" });
     }
 
+    const pointsToAdd = parseInt(amount); // 1 unit = 1 point, regardless of currency
     const token = await getMpesaToken();
     const timestamp = new Date()
       .toISOString()
@@ -152,30 +188,36 @@ const createMpesaPayment = async (req, res) => {
     );
 
     const transactionId = uuidv4();
-    await update(ref(database, `transactions/${transactionId}`), {
+    await updateWithRetry(ref(database, `transactions/${transactionId}`), {
       id: transactionId,
       userId,
       type: "deposit",
       method: "mpesa",
       amount,
-      currency: "KES",
+      currency: currency.toUpperCase(),
       status: "pending",
       checkoutRequestId: response.data.CheckoutRequestID,
+      pointsToAdd,
       createdAt: new Date().toISOString(),
     });
 
     console.log(
-      `Created M-Pesa transaction: ID=${transactionId}, CheckoutRequestID=${response.data.CheckoutRequestID}`
+      `Created M-Pesa transaction: ID=${transactionId}, UserID=${userId}, CheckoutRequestID=${response.data.CheckoutRequestID}, Currency=${currency}, Points=${pointsToAdd}`
     );
 
     return res.status(200).json({
       transactionId,
       checkoutRequestId: response.data.CheckoutRequestID,
+      pointsToAdd,
     });
   } catch (error) {
     console.error("Error creating M-Pesa payment:", {
       message: error.message,
       stack: error.stack,
+    });
+    await updateWithRetry(ref(database, `webhook_errors/mpesa_${uuidv4()}`), {
+      error: `Failed to create M-Pesa payment: ${error.message}`,
+      timestamp: new Date().toISOString(),
     });
     return res.status(500).json({ error: "Failed to create M-Pesa payment" });
   }
@@ -187,6 +229,15 @@ const stripeWebhook = async (req, res) => {
   console.log("Stripe signature:", req.headers["stripe-signature"]);
   console.log("Webhook payload length:", req.body.length);
   console.log("Webhook secret used:", webhookSecret ? "Set" : "Undefined");
+
+  if (!webhookSecret) {
+    console.error("Stripe webhook secret is not defined");
+    await updateWithRetry(ref(database, `webhook_errors/stripe_${uuidv4()}`), {
+      error: "Webhook secret not defined",
+      timestamp: new Date().toISOString(),
+    });
+    return res.status(500).json({ error: "Webhook configuration error" });
+  }
 
   const sig = req.headers["stripe-signature"];
 
@@ -201,7 +252,7 @@ const stripeWebhook = async (req, res) => {
       return res.status(200).json({ received: true });
     }
 
-    await update(eventRef, {
+    await updateWithRetry(eventRef, {
       processed: true,
       type: event.type,
       createdAt: new Date().toISOString(),
@@ -210,19 +261,51 @@ const stripeWebhook = async (req, res) => {
     switch (event.type) {
       case "payment_intent.succeeded":
         const paymentIntent = event.data.object;
-        const { transactionId, userId } = paymentIntent.metadata;
+        const { transactionId, userId, pointsToAdd } = paymentIntent.metadata;
 
-        if (!transactionId || !userId) {
-          console.warn(
-            "Missing transactionId or userId in payment intent metadata"
+        if (!transactionId || !userId || !pointsToAdd) {
+          console.error(
+            "Missing transactionId, userId, or pointsToAdd in payment intent metadata",
+            { transactionId, userId, pointsToAdd }
           );
-          return res.status(200).json({ received: true });
+          await updateWithRetry(
+            ref(database, `webhook_errors/stripe_${uuidv4()}`),
+            {
+              error: "Missing metadata",
+              eventId: event.id,
+              timestamp: new Date().toISOString(),
+            }
+          );
+          return res.status(400).json({ error: "Missing metadata" });
+        }
+
+        const points = parseInt(pointsToAdd);
+        if (isNaN(points) || points <= 0) {
+          console.error("Invalid pointsToAdd value", { pointsToAdd });
+          await updateWithRetry(
+            ref(database, `webhook_errors/stripe_${uuidv4()}`),
+            {
+              error: `Invalid pointsToAdd: ${pointsToAdd}`,
+              eventId: event.id,
+              timestamp: new Date().toISOString(),
+            }
+          );
+          return res.status(400).json({ error: "Invalid pointsToAdd" });
         }
 
         const transactionRef = ref(database, `transactions/${transactionId}`);
         const transactionSnapshot = await get(transactionRef);
         if (!transactionSnapshot.exists()) {
-          console.warn(`Transaction ${transactionId} not found`);
+          console.error(`Transaction ${transactionId} not found`);
+          await updateWithRetry(
+            ref(database, `webhook_errors/stripe_${uuidv4()}`),
+            {
+              error: "Transaction not found",
+              eventId: event.id,
+              transactionId,
+              timestamp: new Date().toISOString(),
+            }
+          );
           return res.status(404).json({ error: "Transaction not found" });
         }
 
@@ -232,18 +315,37 @@ const stripeWebhook = async (req, res) => {
           return res.status(200).json({ received: true });
         }
 
-        await update(transactionRef, {
+        await updateWithRetry(transactionRef, {
           status: "completed",
           updatedAt: new Date().toISOString(),
         });
 
-        const paymentUserRef = ref(database, `users/${userId}`);
-        const paymentUserSnapshot = await get(paymentUserRef);
-        if (paymentUserSnapshot.exists()) {
-          const currentBalance = paymentUserSnapshot.val().balance || 0;
-          const newBalance = currentBalance + paymentIntent.amount / 100;
-          await update(paymentUserRef, { balance: newBalance });
-          console.log(`Updated balance for user ${userId}: KSH ${newBalance}`);
+        const userRef = ref(database, `users/${userId}`);
+        const userSnapshot = await get(userRef);
+        if (userSnapshot.exists()) {
+          const currentPoints = userSnapshot.val().points || 0;
+          await updateWithRetry(userRef, {
+            points: currentPoints + points,
+            updatedAt: new Date().toISOString(),
+          });
+          console.log(
+            `Added ${points} points for user ${userId}, new total: ${
+              currentPoints + points
+            }`
+          );
+        } else {
+          console.error(`User ${userId} not found`);
+          await updateWithRetry(
+            ref(database, `webhook_errors/stripe_${uuidv4()}`),
+            {
+              error: "User not found",
+              eventId: event.id,
+              transactionId,
+              userId,
+              timestamp: new Date().toISOString(),
+            }
+          );
+          return res.status(404).json({ error: "User not found" });
         }
         break;
 
@@ -268,7 +370,7 @@ const stripeWebhook = async (req, res) => {
         );
         if (subscriptionUserSnapshot.exists()) {
           const subUserId = Object.keys(subscriptionUserSnapshot.val())[0];
-          await update(ref(database, `users/${subUserId}`), {
+          await updateWithRetry(ref(database, `users/${subUserId}`), {
             subscriptionId,
             subscriptionStatus,
             updatedAt: new Date().toISOString(),
@@ -287,9 +389,7 @@ const stripeWebhook = async (req, res) => {
       message: error.message,
       stack: error.stack,
     });
-    // Store failed payload for debugging
-    const errorId = uuidv4();
-    await update(ref(database, `webhook_errors/stripe_${errorId}`), {
+    await updateWithRetry(ref(database, `webhook_errors/stripe_${uuidv4()}`), {
       error: error.message,
       signature: sig,
       payloadLength: req.body.length,
@@ -299,57 +399,199 @@ const stripeWebhook = async (req, res) => {
   }
 };
 
-// M-Pesa webhook handler (unchanged as requested)
+// M-Pesa webhook handler
 const mpesaWebhook = async (req, res) => {
   try {
     const { Body } = req.body;
+    if (!Body || !Body.stkCallback) {
+      console.error("Invalid M-Pesa webhook payload", { body: req.body });
+      await updateWithRetry(ref(database, `webhook_errors/mpesa_${uuidv4()}`), {
+        error: "Invalid webhook payload",
+        timestamp: new Date().toISOString(),
+      });
+      return res.status(400).json({ error: "Invalid webhook payload" });
+    }
+
     const { stkCallback } = Body;
     const { CheckoutRequestID, ResultCode, ResultDesc } = stkCallback;
 
-    const transactionRef = database
-      .ref("transactions")
-      .orderByChild("checkoutRequestId")
-      .equalTo(CheckoutRequestID);
-    const transactionSnapshot = await transactionRef.once("value");
+    const eventRef = ref(
+      database,
+      `webhook_events/mpesa_${Checkout17RequestID}`
+    );
+    const eventSnapshot = await get(eventRef);
+    if (eventSnapshot.exists()) {
+      console.log(`M-Pesa event ${CheckoutRequestID} already processed`);
+      return res.status(200).json({ received: true });
+    }
+
+    const transactionQuery = query(
+      ref(database, "transactions"),
+      orderByChild("checkoutRequestId"),
+      equalTo(CheckoutRequestID)
+    );
+    const transactionSnapshot = await get(transactionQuery);
     const transactionData = transactionSnapshot.val();
     if (!transactionData) {
+      console.error(
+        `Transaction with CheckoutRequestID ${CheckoutRequestID} not found`
+      );
+      await updateWithRetry(ref(database, `webhook_errors/mpesa_${uuidv4()}`), {
+        error: "Transaction not found",
+        checkoutRequestId: CheckoutRequestID,
+        timestamp: new Date().toISOString(),
+      });
       return res.status(404).json({ error: "Transaction not found" });
     }
 
     const transactionId = Object.keys(transactionData)[0];
     const transaction = transactionData[transactionId];
 
+    await updateWithRetry(eventRef, {
+      processed: true,
+      type: "stkCallback",
+      createdAt: new Date().toISOString(),
+    });
+
     if (ResultCode === 0) {
       // Success
-      await database.ref(`transactions/${transactionId}`).update({
+      await updateWithRetry(ref(database, `transactions/${transactionId}`), {
         status: "completed",
         updatedAt: new Date().toISOString(),
       });
 
-      const userRef = database.ref(`users/${transaction.userId}`);
-      const userSnapshot = await userRef.once("value");
+      const userRef = ref(database, `users/${transaction.userId}`);
+      const userSnapshot = await get(userRef);
       if (userSnapshot.exists()) {
-        const userData = userSnapshot.val();
-        const newBalance = (userData.balance || 0) + transaction.amount;
-        await userRef.update({ balance: newBalance });
+        const currentPoints = userSnapshot.val().points || 0;
+        const pointsToAdd =
+          parseInt(transaction.pointsToAdd) || parseInt(transaction.amount);
+        if (isNaN(pointsToAdd) || pointsToAdd <= 0) {
+          console.error("Invalid pointsToAdd for M-Pesa transaction", {
+            transactionId,
+            pointsToAdd,
+            amount: transaction.amount,
+          });
+          await updateWithRetry(
+            ref(database, `webhook_errors/mpesa_${uuidv4()}`),
+            {
+              error: `Invalid pointsToAdd: ${pointsToAdd}`,
+              checkoutRequestId: CheckoutRequestID,
+              transactionId,
+              timestamp: new Date().toISOString(),
+            }
+          );
+          return res.status(400).json({ error: "Invalid pointsToAdd" });
+        }
+        await updateWithRetry(userRef, {
+          points: currentPoints + pointsToAdd,
+          updatedAt: new Date().toISOString(),
+        });
+        console.log(
+          `Added ${pointsToAdd} points for user ${
+            transaction.userId
+          }, new total: ${currentPoints + pointsToAdd}`
+        );
+      } else {
+        console.error(`User ${transaction.userId} not found`);
+        await updateWithRetry(
+          ref(database, `webhook_errors/mpesa_${uuidv4()}`),
+          {
+            error: "User not found",
+            checkoutRequestId: CheckoutRequestID,
+            transactionId,
+            timestamp: new Date().toISOString(),
+          }
+        );
+        return res.status(404).json({ error: "User not found" });
       }
     } else {
       // Failed
-      await database.ref(`transactions/${transactionId}`).update({
+      await updateWithRetry(ref(database, `transactions/${transactionId}`), {
         status: "failed",
         error: ResultDesc,
         updatedAt: new Date().toISOString(),
       });
+      console.log(`M-Pesa transaction ${transactionId} failed: ${ResultDesc}`);
     }
 
     return res.status(200).json({ received: true });
   } catch (error) {
-    console.error(
-      "Error processing M-Pesa webhook:",
-      error.message,
-      error.stack
-    );
+    console.error("Error processing M-Pesa webhook:", {
+      message: error.message,
+      stack: error.stack,
+    });
+    await updateWithRetry(ref(database, `webhook_errors/mpesa_${uuidv4()}`), {
+      error: error.message,
+      checkoutRequestId: CheckoutRequestID || "unknown",
+      timestamp: new Date().toISOString(),
+    });
     return res.status(500).json({ error: "Webhook error" });
+  }
+};
+
+// Convert existing wallet balance to points
+const convertWalletToPoints = async (req, res) => {
+  const { userId } = req.body;
+
+  if (!userId || typeof userId !== "string") {
+    return res.status(400).json({ error: "Valid userId required" });
+  }
+  if (userId !== req.user.uid) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+
+  try {
+    const userRef = ref(database, `users/${userId}`);
+    const snapshot = await get(userRef);
+    if (!snapshot.exists()) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const userData = snapshot.val();
+    if (userData.pointsConverted) {
+      return res
+        .status(200)
+        .json({ message: "Wallet already converted to points" });
+    }
+
+    const { amount, currency } = userData.wallet || {
+      amount: 0,
+      currency: "KES",
+    };
+    if (amount <= 0) {
+      return res.status(200).json({ message: "No wallet balance to convert" });
+    }
+
+    // Convert wallet amount directly to points (1:1)
+    const pointsToAdd = Math.round(amount);
+
+    // Update user document
+    await updateWithRetry(userRef, {
+      points: (userData.points || 0) + pointsToAdd,
+      wallet: { amount: 0, currency: "KES" },
+      pointsConverted: true,
+      updatedAt: new Date().toISOString(),
+    });
+
+    console.log(`Converted ${pointsToAdd} points for user ${userId}`);
+
+    return res.status(200).json({
+      message: `Converted ${amount} ${currency} to ${pointsToAdd} points`,
+    });
+  } catch (error) {
+    console.error("Error converting wallet to points:", {
+      message: error.message,
+      stack: error.stack,
+    });
+    await updateWithRetry(ref(database, `webhook_errors/wallet_${uuidv4()}`), {
+      error: `Failed to convert wallet: ${error.message}`,
+      userId,
+      timestamp: new Date().toISOString(),
+    });
+    return res
+      .status(500)
+      .json({ error: "Failed to convert wallet to points" });
   }
 };
 
@@ -358,4 +600,5 @@ module.exports = {
   createMpesaPayment,
   stripeWebhook,
   mpesaWebhook,
+  convertWalletToPoints,
 };
