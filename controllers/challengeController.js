@@ -144,7 +144,7 @@ const createChallenge = async (req, res) => {
               existingChallengeData.status === "pending"
             ) {
               return res.status(409).json({
-                error:
+        error:
                   "A pending challenge already exists with this opponent for this game",
                 existingChallengeId: existingChallengeId,
               });
@@ -185,7 +185,7 @@ const createChallenge = async (req, res) => {
               !existingChallengeData.challengedScore
             ) {
               return res.status(409).json({
-                error:
+              error:
                   "An active challenge already exists with this opponent. Please complete it first.",
                 existingChallengeId: existingChallengeId,
               });
@@ -297,7 +297,7 @@ const acceptChallenge = async (req, res) => {
 
     // Update user indexes
     await updateChallengeInUserIndex(
-      challengeId,
+        challengeId,
       challengeData.challengerId,
       challengeData.challengedId,
       "accepted"
@@ -362,7 +362,7 @@ const rejectChallenge = async (req, res) => {
 
     // Update user indexes
     await updateChallengeInUserIndex(
-      challengeId,
+        challengeId,
       challengeData.challengerId,
       challengeData.challengedId,
       "rejected"
@@ -479,8 +479,8 @@ const submitChallengeScore = async (req, res) => {
     if (
       sessionData.userId !== userId ||
       sessionData.challengeId !== challengeId
-    ) {
-      return res.status(403).json({
+      ) {
+        return res.status(403).json({
         error: "Invalid session",
         message:
           "Session token does not match this challenge. Please restart the game.",
@@ -580,17 +580,30 @@ const submitChallengeScore = async (req, res) => {
 /**
  * Get user's challenge history (OPTIMIZED)
  */
+// Utility: timeout wrapper to avoid long-hanging awaits
+function withTimeout(promise, ms, label = "operation") {
+  let timeoutId;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new Error(`Timeout after ${ms}ms in ${label}`));
+    }, ms);
+  });
+  return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeoutId));
+}
+
 const getChallengeHistory = async (req, res) => {
   try {
     const userId = req.user.uid;
     const { limit = 10, offset = 0, status } = req.query;
 
-    console.log(`🔍 ULTRA-OPTIMIZED: Fetching challenges for user: ${userId}`);
+    console.log(`🔍 ULTRA-OPTIMIZED: Fetching challenges for user: ${userId} status=${status || 'all'} limit=${limit} offset=${offset}`);
     const startTime = Date.now();
 
     // ULTRA-OPTIMIZATION: Check cache first
     const cacheKey = `${userId}_${status || "all"}`;
+    const cacheLookupStart = Date.now();
     const cachedResult = getCachedChallengeIndex(userId, status);
+    console.log(`🧮 CACHE LOOKUP took ${Date.now() - cacheLookupStart}ms`);
 
     if (cachedResult && cachedResult.length > 0) {
       console.log(
@@ -615,7 +628,12 @@ const getChallengeHistory = async (req, res) => {
     }
 
     // OPTIMIZATION: Use metadata index instead of decrypting all challenges
-    const challengeIds = await getUserChallengeIds(userId, status);
+    const idsStart = Date.now();
+    const challengeIds = await withTimeout(
+      Promise.resolve(getUserChallengeIds(userId, status)),
+      10000,
+      "getUserChallengeIds"
+    );
 
     console.log(
       `📦 User has ${challengeIds.length} challenges (no decryption needed)`
@@ -639,10 +657,11 @@ const getChallengeHistory = async (req, res) => {
     const uniqueUserIds = new Set();
 
     // Decrypt only the challenges we need
+    const decryptStart = Date.now();
     for (const challengeId of challengesToDecrypt) {
       try {
         const challengeRef = ref(database, `secureChallenges/${challengeId}`);
-        const challengeSnap = await get(challengeRef);
+        const challengeSnap = await withTimeout(get(challengeRef), 10000, `get_secureChallenges/${challengeId}`);
 
         if (!challengeSnap.exists()) continue;
 
@@ -708,7 +727,7 @@ const getChallengeHistory = async (req, res) => {
       await Promise.all(userPromises);
     }
 
-    console.log(`✅ Fetched ${Object.keys(userDataMap).length} user profiles`);
+    console.log(`✅ Fetched ${Object.keys(userDataMap).length} user profiles [decrypt ${Date.now() - decryptStart}ms]`);
 
     // OPTIMIZATION: Enrich challenges with user data
     const enrichedChallenges = userChallenges.map((challenge) => {
@@ -730,7 +749,7 @@ const getChallengeHistory = async (req, res) => {
     // ULTRA-OPTIMIZATION: Cache the results for future requests
     setCachedChallengeIndex(userId, status, enrichedChallenges);
 
-    res.json({
+    return res.json({
       success: true,
       data: enrichedChallenges,
       total: challengeIds.length,
@@ -738,10 +757,18 @@ const getChallengeHistory = async (req, res) => {
     });
   } catch (error) {
     console.error("Error getting challenge history:", error);
-    res.status(500).json({
-      error: "Failed to get challenge history",
-      message: error.message,
-    });
+    // Fail-safe: do not hang frontend; return minimal response
+    try {
+      return res.status(200).json({
+        success: true,
+        data: [],
+        total: 0,
+        hasMore: false,
+        error: error.message,
+      });
+    } catch (_) {
+      return res.status(500).json({ error: "Failed to get challenge history" });
+    }
   }
 };
 
@@ -758,7 +785,7 @@ const getChallengeHistoryLegacy = async (req, res) => {
 
     // Get all challenges
     const challengesRef = ref(database, "secureChallenges");
-    const challengesSnap = await get(challengesRef);
+    const challengesSnap = await withTimeout(get(challengesRef), 10000, "legacy_get_secureChallenges");
 
     if (!challengesSnap.exists()) {
       return res.json({ success: true, data: [], total: 0, hasMore: false });

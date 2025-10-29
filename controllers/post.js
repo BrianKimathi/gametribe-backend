@@ -104,6 +104,17 @@ const getPost = async (req, res) => {
   }
 };
 
+// Helper: wrap a promise with a timeout to avoid Vercel 300s runtime timeouts
+function withTimeout(promise, ms, label = "operation") {
+  let timeoutId;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new Error(`Timeout after ${ms}ms in ${label}`));
+    }, ms);
+  });
+  return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeoutId));
+}
+
 const getPosts = async (req, res) => {
   const startTime = Date.now();
   try {
@@ -176,7 +187,11 @@ const getPosts = async (req, res) => {
     if (lastPostId) {
       // Get the timestamp of the last post for cursor-based pagination
       const lastPostRef = database.ref(`posts/${lastPostId}`);
-      const lastPostSnapshot = await lastPostRef.once("value");
+      const lastPostSnapshot = await withTimeout(
+        lastPostRef.once("value"),
+        10000,
+        `get posts/${lastPostId}`
+      );
       if (lastPostSnapshot.exists()) {
         const lastPost = lastPostSnapshot.val();
         // Use endBefore to get posts older than the last post
@@ -187,7 +202,11 @@ const getPosts = async (req, res) => {
     // Limit results - get more than needed to account for filtering
     query = query.limitToLast(limitNum * 2); // Get more posts to account for filtering
 
-    const snapshot = await query.once("value");
+    const snapshot = await withTimeout(
+      query.once("value"),
+      12000,
+      `query posts createdAt limit=${limitNum * 2}`
+    );
     const postsData = snapshot.val() || {};
 
     console.log(
@@ -323,8 +342,16 @@ const getPosts = async (req, res) => {
 
     return res.status(200).json(response);
   } catch (error) {
-    console.error("Error fetching posts:", error.message, error.stack);
-    return res.status(500).json({ error: "Failed to fetch posts" });
+    console.error("Error fetching posts:", error.message);
+    // Fail-safe: return an empty page quickly to avoid frontend hang and Vercel 300s timeouts
+    const page = parseInt(req.query?.page || 1);
+    const limit = parseInt(req.query?.limit || 20);
+    const minimal = {
+      posts: [],
+      pagination: { page, limit, hasMore: false, total: 0, lastPostId: null },
+      error: error.message,
+    };
+    return res.status(200).json(minimal);
   }
 };
 
