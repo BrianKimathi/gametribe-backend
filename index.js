@@ -53,6 +53,8 @@ const adminRouter = require("./routes/admin");
 const migrationRouter = require("./routes/migration");
 
 const app = express();
+// Trust Vercel/Proxy to ensure req.ip is derived correctly for rate limiting
+app.set("trust proxy", true);
 
 // Rate limiting for Nominatim API calls
 const rateLimitMap = new Map();
