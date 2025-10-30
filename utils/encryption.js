@@ -16,10 +16,39 @@ const generateChallengeId = () => {
 };
 
 /**
+ * Normalize an input secret into a 32-byte password Buffer.
+ * Supports either:
+ * - 32-character UTF-8 secrets
+ * - 64-character hex strings (representing 32 bytes)
+ */
+const normalizePassword = (password) => {
+  if (!password) return null;
+  // If 64-length hex, treat as raw 32 bytes
+  const isHex32Bytes =
+    typeof password === "string" && password.length === 64 && /^[0-9a-fA-F]+$/.test(password);
+  if (isHex32Bytes) {
+    return Buffer.from(password, "hex");
+  }
+  // If 32 characters, use UTF-8 bytes
+  if (typeof password === "string" && password.length === 32) {
+    return Buffer.from(password, "utf8");
+  }
+  return null;
+};
+
+/**
  * Generate encryption key from password using PBKDF2
  */
 const generateKey = (password, salt) => {
-  return crypto.pbkdf2Sync(password, salt, 100000, 32, "sha512");
+  const pwBuf = Buffer.isBuffer(password) ? password : normalizePassword(password);
+  if (!pwBuf) {
+    throw new Error(
+      `Encryption key must be 32 chars (UTF-8) or 64-char hex, got ${
+        password ? String(password).length : 0
+      }`
+    );
+  }
+  return crypto.pbkdf2Sync(pwBuf, salt, 100000, 32, "sha512");
 };
 
 /**
@@ -27,10 +56,11 @@ const generateKey = (password, salt) => {
  */
 const encryptData = (data, password) => {
   try {
-    // Validate password length
-    if (!password || password.length !== 32) {
+    // Normalize/validate password
+    const pwBuf = normalizePassword(password);
+    if (!pwBuf) {
       throw new Error(
-        `Encryption key must be exactly 32 characters, got ${
+        `Encryption key must be 32 chars (UTF-8) or 64-char hex, got ${
           password ? password.length : 0
         }`
       );
@@ -41,7 +71,7 @@ const encryptData = (data, password) => {
     const iv = crypto.randomBytes(IV_LENGTH);
 
     // Generate key from password and salt
-    const key = generateKey(password, salt);
+    const key = generateKey(pwBuf, salt);
 
     // Create cipher
     const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
@@ -71,10 +101,11 @@ const encryptData = (data, password) => {
  */
 const decryptData = (encryptedData, password) => {
   try {
-    // Validate password length
-    if (!password || password.length !== 32) {
+    // Normalize/validate password
+    const pwBuf = normalizePassword(password);
+    if (!pwBuf) {
       throw new Error(
-        `Decryption key must be exactly 32 characters, got ${
+        `Decryption key must be 32 chars (UTF-8) or 64-char hex, got ${
           password ? password.length : 0
         }`
       );
@@ -105,7 +136,7 @@ const decryptData = (encryptedData, password) => {
     const encrypted = encryptedData.data;
 
     // Generate key from password and salt
-    const key = generateKey(password, salt);
+    const key = generateKey(pwBuf, salt);
 
     // Create decipher
     const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);

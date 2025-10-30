@@ -100,8 +100,8 @@ const createChallenge = async (req, res) => {
     if (isNaN(bet) || bet < 10 || bet > 10000) {
       return res.status(400).json({
         error: "Bet amount must be between 10 and 10,000 KES",
-      });
-    }
+        });
+      }
 
     // Check if user is challenging themselves
     if (challengerId === challengedId) {
@@ -123,14 +123,14 @@ const createChallenge = async (req, res) => {
         const existingChallengeRef = ref(
           database,
           `secureChallenges/${existingChallengeId}`
-        );
+      );
         const existingChallengeSnap = await get(existingChallengeRef);
 
         if (existingChallengeSnap.exists()) {
           const existingChallengeData = decryptData(
             existingChallengeSnap.val(),
             ENCRYPTION_KEY
-          );
+    );
 
           // Check if this is a challenge with the same opponent and game
           if (
@@ -147,11 +147,11 @@ const createChallenge = async (req, res) => {
         error:
                   "A pending challenge already exists with this opponent for this game",
                 existingChallengeId: existingChallengeId,
-              });
+      });
             }
           }
         }
-      }
+    }
 
       // Also check challenger's accepted challenges
       const acceptedChallengeIds = await getUserChallengeIds(
@@ -198,7 +198,7 @@ const createChallenge = async (req, res) => {
     } catch (duplicateCheckError) {
       console.error(
         `⚠️ Error checking for duplicates: ${duplicateCheckError.message}`
-      );
+          );
       // Continue with challenge creation even if duplicate check fails
       // This prevents blocking challenge creation due to indexing issues
     }
@@ -473,7 +473,7 @@ const submitChallengeScore = async (req, res) => {
         error: "Invalid or expired game session",
         message: "Please restart the game to get a new session token",
       });
-    }
+      }
 
     const sessionData = sessionSnap.val();
     if (
@@ -865,7 +865,7 @@ const getChallengeHistoryLegacy = async (req, res) => {
               displayName:
                 userData.displayName || userData.username || "Unknown Player",
               photoURL: userData.photoURL || userData.avatar || "",
-            };
+          };
           }
         } catch (error) {
           console.warn(`Failed to fetch user data for ${uid}:`, error.message);

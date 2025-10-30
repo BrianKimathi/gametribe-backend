@@ -99,7 +99,11 @@ const getPost = async (req, res) => {
 
     return res.status(200).json(processedPost);
   } catch (error) {
-    console.error("Error fetching post:", error);
+    console.error("❌ Error fetching post:", {
+      message: error.message,
+      code: error.code,
+      stack: error.stack,
+    });
     return res.status(500).json({ error: "Failed to fetch post" });
   }
 };
@@ -107,12 +111,23 @@ const getPost = async (req, res) => {
 // Helper: wrap a promise with a timeout to avoid Vercel 300s runtime timeouts
 function withTimeout(promise, ms, label = "operation") {
   let timeoutId;
+  const startedAt = Date.now();
   const timeoutPromise = new Promise((_, reject) => {
     timeoutId = setTimeout(() => {
+      const elapsed = Date.now() - startedAt;
+      console.warn(
+        `⏱️ Timeout triggered: ${label} exceeded ${ms}ms (elapsed=${elapsed}ms)`
+      );
       reject(new Error(`Timeout after ${ms}ms in ${label}`));
     }, ms);
   });
-  return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeoutId));
+  return Promise.race([promise, timeoutPromise])
+    .then((result) => {
+      const elapsed = Date.now() - startedAt;
+      console.log(`✅ Completed: ${label} in ${elapsed}ms`);
+      return result;
+    })
+    .finally(() => clearTimeout(timeoutId));
 }
 
 const getPosts = async (req, res) => {
@@ -137,6 +152,51 @@ const getPosts = async (req, res) => {
       limit,
       query: req.query,
     });
+
+    // Fast-fail if Admin credentials are unhealthy to avoid long timeouts
+    try {
+      const { getAdminHealth } = require("../config/firebase");
+      const health = getAdminHealth && getAdminHealth();
+      if (health && health.healthy === false) {
+        console.warn(
+          "🚫 Skipping RTDB read due to unhealthy Admin credentials (fast-fail). lastCheck=",
+          new Date(health.lastCheck).toISOString()
+        );
+        return res.status(200).json({
+          posts: [],
+          pagination: {
+            page: parseInt(page),
+            limit: parseInt(limit),
+            hasMore: false,
+            total: 0,
+            lastPostId: null,
+          },
+          error:
+            "admin-unhealthy: invalid credentials/time skew - returning empty posts",
+        });
+      }
+    } catch (_) {}
+
+    // Quick connectivity/time sanity check to diagnose RTDB hangs
+    try {
+      const infoRef = database.ref(".info/serverTimeOffset");
+      console.log("🧪 Probing .info/serverTimeOffset ...");
+      const offsetSnap = await withTimeout(
+        infoRef.once("value"),
+        3000,
+        ".info/serverTimeOffset read"
+      );
+      console.log(
+        "🧪 serverTimeOffset:",
+        offsetSnap && offsetSnap.exists() ? offsetSnap.val() : null
+      );
+    } catch (probeErr) {
+      console.error("❌ Failed to read .info/serverTimeOffset:", {
+        message: probeErr.message,
+        code: probeErr.code,
+        stack: probeErr.stack,
+      });
+    }
 
     // ✅ NEW: Input validation
     const pageNum = parseInt(page);
@@ -181,7 +241,9 @@ const getPosts = async (req, res) => {
     monitoringService.trackCacheMiss("posts");
 
     const postsRef = database.ref("posts");
+    console.log("🗄️ Posts DB path:", postsRef.toString());
     let query = postsRef.orderByChild("createdAt");
+    console.log("🔎 Building posts query ordered by 'createdAt'");
 
     // ✅ NEW: Implement pagination with cursor-based approach
     if (lastPostId) {
@@ -202,6 +264,7 @@ const getPosts = async (req, res) => {
     // Limit results - get more than needed to account for filtering
     query = query.limitToLast(limitNum * 2); // Get more posts to account for filtering
 
+    console.log("🚀 Executing posts query (limitToLast=", limitNum * 2, ") ...");
     const snapshot = await withTimeout(
       query.once("value"),
       12000,
@@ -258,7 +321,14 @@ const getPosts = async (req, res) => {
     if (category) {
       console.log("🔍 Filtering posts by category:", category);
       console.log("🔍 Total posts before category filtering:", posts.length);
-      posts = posts.filter((post) => post.category === category);
+      if (category === "community") {
+        // Include posts with no category set (legacy) and exclude only explicit clan posts
+        posts = posts.filter((post) => (post.category || "community") !== "clan");
+      } else if (category === "clan") {
+        posts = posts.filter((post) => post.category === "clan");
+      } else {
+        posts = posts.filter((post) => post.category === category);
+      }
       console.log("🔍 Posts after category filtering:", posts.length);
       console.log(
         "🔍 Category filtered posts:",

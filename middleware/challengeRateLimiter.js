@@ -11,6 +11,13 @@ const rateLimitStore = new Map();
  */
 const enforceChallengeRateLimit = (req, res, next) => {
   try {
+    // Global bypass for development or when explicitly disabled
+    if (
+      process.env.DISABLE_RATE_LIMITING === "true" ||
+      process.env.NODE_ENV !== "production"
+    ) {
+      return next();
+    }
     const userId = req.user?.uid;
     if (!userId) {
       return res.status(401).json({ error: "Authentication required" });

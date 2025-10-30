@@ -62,6 +62,9 @@ const RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute
 const MAX_REQUESTS_PER_WINDOW = 10; // Max 10 requests per minute per IP
 
 const checkRateLimit = (ip) => {
+  if (process.env.DISABLE_RATE_LIMITING === "true" || isDevelopment) {
+    return true;
+  }
   const now = Date.now();
   const userRequests = rateLimitMap.get(ip) || [];
 
@@ -505,6 +508,21 @@ app.get(`${routePrefix}/test`, (req, res) => {
     environment: process.env.NODE_ENV,
     isFirebaseFunctions: !!isFirebaseFunctions,
   });
+});
+
+// Admin/Firebase health endpoint
+app.get(`${routePrefix}/health/admin`, (req, res) => {
+  try {
+    const { getAdminHealth } = require("./config/firebase");
+    const health = getAdminHealth && getAdminHealth();
+    res.json({
+      healthy: !!health?.healthy,
+      lastCheck: health?.lastCheck ? new Date(health.lastCheck).toISOString() : null,
+      lastError: health?.lastError || null,
+    });
+  } catch (e) {
+    res.status(500).json({ healthy: false, error: e.message });
+  }
 });
 
 // Test Firebase connection
