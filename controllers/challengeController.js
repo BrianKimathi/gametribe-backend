@@ -44,6 +44,15 @@ const {
   emitChallengeCompleted,
 } = require("../services/socketService");
 
+// Import FCM notification service
+const {
+  sendChallengeCreatedNotification,
+  sendChallengeAcceptedNotification,
+  sendChallengeRejectedNotification,
+  sendChallengeCompletedNotification,
+  sendScoreUpdatedNotification,
+} = require("../services/fcmService");
+
 /**
  * Challenge Controller
  * Handles monetized challenges with wallet integration and real-time updates
@@ -233,6 +242,11 @@ const createChallenge = async (req, res) => {
     // Emit real-time notification to challenged user
     emitChallengeCreated(challengerId, challengedId, challengeData);
 
+    // Send FCM push notification
+    sendChallengeCreatedNotification(challengerId, challengedId, challengeData).catch((err) => {
+      log.error("FCM notification failed", { error: err.message });
+    });
+
     res.json({
       success: true,
       challengeId,
@@ -308,6 +322,15 @@ const acceptChallenge = async (req, res) => {
       challengeData
     );
 
+    // Send FCM push notification
+    sendChallengeAcceptedNotification(
+      challengeData.challengerId,
+      challengedId,
+      challengeData
+    ).catch((err) => {
+      log.error("FCM notification failed", { error: err.message });
+    });
+
     res.json({
       success: true,
       message: "Challenge accepted successfully",
@@ -377,6 +400,15 @@ const rejectChallenge = async (req, res) => {
       challengedId,
       challengeData
     );
+
+    // Send FCM push notification
+    sendChallengeRejectedNotification(
+      challengeData.challengerId,
+      challengedId,
+      challengeData
+    ).catch((err) => {
+      log.error("FCM notification failed", { error: err.message });
+    });
 
     res.json({
       success: true,
@@ -584,13 +616,37 @@ const submitChallengeScore = async (req, res) => {
       isComplete: challengeData.status === "completed",
     });
 
-    // If challenge is completed, emit completion event
+    // Send FCM notification for score update (only if not completed yet)
+    if (challengeData.status !== "completed") {
+      sendScoreUpdatedNotification(opponentId, userId, challengeData).catch((err) => {
+        log.error("FCM score notification failed", { error: err.message });
+      });
+    }
+
+    // If challenge is completed, emit completion event and send notifications
     if (challengeData.status === "completed") {
       emitChallengeCompleted(
         challengeData.challengerId,
         challengeData.challengedId,
         challengeData
       );
+
+      // Send FCM notifications to both players
+      sendChallengeCompletedNotification(
+        challengeData.challengerId,
+        challengeData.challengedId,
+        challengeData
+      ).catch((err) => {
+        log.error("FCM completion notification failed (challenger)", { error: err.message });
+      });
+
+      sendChallengeCompletedNotification(
+        challengeData.challengedId,
+        challengeData.challengerId,
+        challengeData
+      ).catch((err) => {
+        log.error("FCM completion notification failed (challenged)", { error: err.message });
+      });
     }
 
     res.json({
@@ -641,12 +697,110 @@ const getChallengeHistory = async (req, res) => {
 
     log.info("history:ids", { rid, count: challengeIds.length });
 
-    // FALLBACK: If no indexes exist, use the old method for existing challenges
+    // FALLBACK: If no indexes exist, try fetching directly from challenges
     if (challengeIds.length === 0) {
       console.log(
-        "🔄 No challenge indexes found, falling back to legacy method..."
+        "🔄 No challenge indexes found, trying direct challenge fetch..."
       );
-      return await getChallengeHistoryLegacy(req, res);
+      
+      // Try to fetch challenges directly by querying the challenges node
+      try {
+        const challengesRef = ref(database, "challenges");
+        const challengesSnapshot = await get(challengesRef);
+        
+        if (!challengesSnapshot.exists()) {
+          log.info("history:no_challenges", { rid });
+          return res.json({
+            success: true,
+            data: [],
+            total: 0,
+            hasMore: false,
+          });
+        }
+
+        const allChallenges = challengesSnapshot.val();
+        const userChallenges = [];
+
+        // Filter challenges where user is challenger or challenged
+        for (const [challengeId, challengeData] of Object.entries(allChallenges)) {
+          if (
+            challengeData.challengerId === userId ||
+            challengeData.challengedId === userId
+          ) {
+            // Apply status filter if provided
+            if (!status || challengeData.status === status) {
+              userChallenges.push({
+                ...challengeData,
+                id: challengeId,
+                challengeId: challengeId,
+              });
+            }
+          }
+        }
+
+        // Sort by createdAt (newest first)
+        userChallenges.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+
+        // Apply pagination
+        const paginatedChallenges = userChallenges.slice(
+          parseInt(offset),
+          parseInt(offset) + parseInt(limit)
+        );
+
+        // Enrich with user data
+        const uniqueUserIds = new Set();
+        paginatedChallenges.forEach((challenge) => {
+          uniqueUserIds.add(challenge.challengerId);
+          uniqueUserIds.add(challenge.challengedId);
+        });
+
+        const userDataMap = {};
+        if (uniqueUserIds.size > 0) {
+          const userPromises = Array.from(uniqueUserIds).map(async (uid) => {
+            try {
+              const userRef = ref(database, `users/${uid}`);
+              const userSnap = await get(userRef);
+              if (userSnap.exists()) {
+                const userData = userSnap.val();
+                userDataMap[uid] = {
+                  displayName:
+                    userData.displayName || userData.username || "Unknown Player",
+                  photoURL: userData.photoURL || userData.avatar || "",
+                };
+              }
+            } catch (error) {
+              console.warn(`Failed to fetch user data for ${uid}:`, error.message);
+            }
+          });
+          await Promise.all(userPromises);
+        }
+
+        const enrichedChallenges = paginatedChallenges.map((challenge) => {
+          const challengerData = userDataMap[challenge.challengerId] || {};
+          const challengedData = userDataMap[challenge.challengedId] || {};
+
+          return {
+            ...challenge,
+            challengerName: challengerData.displayName || "Unknown Player",
+            challengedName: challengedData.displayName || "Unknown Player",
+            challengerAvatar: challengerData.photoURL || "",
+            challengedAvatar: challengedData.photoURL || "",
+          };
+        });
+
+        log.info("history:fallback_success", { rid, items: enrichedChallenges.length });
+
+        return res.json({
+          success: true,
+          data: enrichedChallenges,
+          total: userChallenges.length,
+          hasMore: userChallenges.length > parseInt(offset) + parseInt(limit),
+        });
+      } catch (fallbackError) {
+        log.error("history:fallback_error", { error: fallbackError.message });
+        // Continue with legacy method
+        return await getChallengeHistoryLegacy(req, res);
+      }
     }
 
     // Get only the challenges we need
@@ -673,9 +827,10 @@ const getChallengeHistory = async (req, res) => {
         uniqueUserIds.add(challengeData.challengerId);
         uniqueUserIds.add(challengeData.challengedId);
 
-        // Store minimal challenge data
+        // Store challenge data with both id and challengeId for frontend compatibility
         userChallenges.push({
-          challengeId: challengeData.challengeId,
+          id: challengeId, // Frontend expects 'id'
+          challengeId: challengeId, // Also include challengeId
           challengerId: challengeData.challengerId,
           challengedId: challengeData.challengedId,
           gameId: challengeData.gameId,

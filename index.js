@@ -87,18 +87,26 @@ const checkRateLimit = (ip) => {
 // upload is already imported from fileValidator middleware
 
 // Apply CORS
+// Allow ngrok URLs for local development
+const defaultOrigins = [
+  // Development URLs
+  "http://localhost:5173",
+  "http://localhost:5174",
+  "http://localhost:5000",
+  // Production URLs
+  "https://hub.gametribe.com",
+  "https://gametribe.com",
+  "https://gt-server-mu.vercel.app",
+];
+
+// Add ngrok URL if provided
+if (process.env.NGROK_URL) {
+  defaultOrigins.push(process.env.NGROK_URL);
+}
+
 const allowedOrigins = process.env.ALLOWED_ORIGINS
-  ? process.env.ALLOWED_ORIGINS.split(",")
-  : [
-      // Development URLs
-      "http://localhost:5173",
-      "http://localhost:5174",
-      "http://localhost:5000",
-      // Production URLs
-      "https://hub.gametribe.com",
-      "https://gametribe.com",
-      "https://gt-server-mu.vercel.app",
-    ];
+  ? process.env.ALLOWED_ORIGINS.split(",").concat(defaultOrigins)
+  : defaultOrigins;
 
 console.log("🌐 CORS Allowed Origins:", allowedOrigins);
 
@@ -136,13 +144,21 @@ app.use(
         return callback(null, true);
       }
 
+      // Check exact match first
       if (allowedOrigins.includes(origin)) {
         console.log("✅ CORS: Origin allowed:", origin);
         return callback(null, true);
-      } else {
-        console.log("❌ CORS: Origin blocked:", origin);
-        return callback(new Error("Not allowed by CORS"));
       }
+
+      // In development, allow any ngrok URL
+      if ((process.env.NODE_ENV === "development" || !process.env.NODE_ENV) && 
+          (origin.includes("ngrok-free.app") || origin.includes("ngrok.io"))) {
+        console.log("✅ CORS: Ngrok origin allowed in development:", origin);
+        return callback(null, true);
+      }
+
+      console.log("❌ CORS: Origin blocked:", origin);
+      return callback(new Error("Not allowed by CORS"));
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
@@ -152,6 +168,7 @@ app.use(
       "X-SSO-Token",
       "X-Community-Token",
       "X-Mobile-App-Id",
+      "ngrok-skip-browser-warning", // Allow ngrok bypass header
     ],
     exposedHeaders: ["X-SSO-Token", "X-Community-Token"],
   })
@@ -604,9 +621,16 @@ const startServer = async () => {
   }
 };
 
-// Export for Firebase Functions or start local server
+// Export for Vercel, Firebase Functions, or start local server
 // isFirebaseFunctions is already defined earlier in the file
-if (isFirebaseFunctions) {
+if (process.env.VERCEL) {
+  // Vercel serverless environment
+  // Note: Socket.IO WebSockets don't work on Vercel serverless
+  // Socket.IO will fall back to polling-only mode
+  module.exports = app;
+  console.log("✅ Backend configured for Vercel (serverless)");
+  console.log("⚠️ Socket.IO WebSockets disabled - using polling only");
+} else if (isFirebaseFunctions) {
   // Firebase Functions environment
   const functions = require("firebase-functions/v2");
 

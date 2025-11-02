@@ -8,24 +8,84 @@ let io = null;
  * Initialize Socket.IO server
  */
 const initializeSocketIO = (httpServer) => {
-  // Configure CORS for Socket.IO
-  const allowedOrigins = process.env.ALLOWED_ORIGINS
-    ? process.env.ALLOWED_ORIGINS.split(",")
-    : [
-        "http://localhost:5173",
-        "http://localhost:5174",
-        "http://localhost:5000",
-        "https://hub.gametribe.com",
-        "https://gametribe.com",
-      ];
+  // Skip Socket.IO initialization if no HTTP server (Vercel serverless)
+  if (!httpServer || process.env.VERCEL) {
+    log.warn("Socket.IO skipped: No HTTP server available (Vercel serverless)");
+    log.warn("Real-time features will be limited. Consider using polling-only mode on client.");
+    return null;
+  }
 
+  // Configure CORS for Socket.IO
+  // Allow ngrok URLs (for local development)
+  const defaultOrigins = [
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "http://localhost:5000",
+    "https://hub.gametribe.com",
+    "https://gametribe.com",
+    "https://gametibe2025.web.app",
+    "https://gametibe2025.firebaseapp.com",
+    "https://community-gametribe.web.app",
+    "https://community-gametribe.firebaseapp.com",
+  ];
+
+  // Add ngrok URLs if present in environment
+  const ngrokUrl = process.env.NGROK_URL;
+  if (ngrokUrl) {
+    defaultOrigins.push(ngrokUrl);
+  }
+
+  // Allow any ngrok URL for local development
+  const allowedOrigins = process.env.ALLOWED_ORIGINS
+    ? process.env.ALLOWED_ORIGINS.split(",").concat(defaultOrigins)
+    : defaultOrigins;
+
+  // In development, allow all ngrok URLs
+  if (process.env.NODE_ENV === "development" || !process.env.NODE_ENV) {
+    allowedOrigins.push(/^https:\/\/.*\.ngrok-free\.app$/);
+    allowedOrigins.push(/^https:\/\/.*\.ngrok\.io$/);
+  }
+
+  // Prefer polling for better compatibility with various hosting platforms
   io = new Server(httpServer, {
     cors: {
-      origin: allowedOrigins,
+      origin: (origin, callback) => {
+        // Allow requests with no origin (like mobile apps or curl requests)
+        if (!origin) return callback(null, true);
+        
+        // Check if origin matches allowed patterns
+        const isAllowed = allowedOrigins.some(allowed => {
+          if (typeof allowed === 'string') {
+            return origin === allowed;
+          }
+          if (allowed instanceof RegExp) {
+            return allowed.test(origin);
+          }
+          return false;
+        });
+
+        if (isAllowed || process.env.NODE_ENV === "development") {
+          callback(null, true);
+        } else {
+          callback(new Error("Not allowed by CORS"));
+        }
+      },
       methods: ["GET", "POST"],
       credentials: true,
     },
-    transports: ["websocket", "polling"],
+    transports: ["polling", "websocket"], // Prefer polling for better compatibility
+    // Additional options for better compatibility
+    allowEIO3: true,
+    pingTimeout: 60000,
+    pingInterval: 25000,
+    maxHttpBufferSize: 1e6,
+    // Allow all origins in development for ngrok
+    allowRequest: (req, callback) => {
+      if (process.env.NODE_ENV === "development" || !process.env.NODE_ENV) {
+        return callback(null, true);
+      }
+      callback(null, true);
+    },
   });
 
   // Authentication middleware for Socket.IO
@@ -91,14 +151,25 @@ const initializeSocketIO = (httpServer) => {
  * Emit challenge created event to opponent
  */
 const emitChallengeCreated = (challengerId, challengedId, challengeData) => {
-  if (!io) return;
+  if (!io) {
+    log.debug("Socket.IO not available, skipping emitChallengeCreated");
+    return;
+  }
   
+  // Emit to challenged user (the one receiving the challenge)
   io.to(`user:${challengedId}`).emit("challenge:created", {
     ...challengeData,
     type: "challenge_created",
   });
   
+  // Also emit to challenger so they see it in their list immediately
+  io.to(`user:${challengerId}`).emit("challenge:created", {
+    ...challengeData,
+    type: "challenge_created",
+  });
+  
   log.info("Challenge created event emitted", {
+    challengerId,
     challengedId,
     challengeId: challengeData.challengeId,
   });
@@ -108,7 +179,10 @@ const emitChallengeCreated = (challengerId, challengedId, challengeData) => {
  * Emit challenge accepted event to challenger
  */
 const emitChallengeAccepted = (challengerId, challengedId, challengeData) => {
-  if (!io) return;
+  if (!io) {
+    log.debug("Socket.IO not available, skipping emitChallengeAccepted");
+    return;
+  }
   
   io.to(`user:${challengerId}`).emit("challenge:accepted", {
     ...challengeData,
@@ -125,7 +199,10 @@ const emitChallengeAccepted = (challengerId, challengedId, challengeData) => {
  * Emit challenge rejected event to challenger
  */
 const emitChallengeRejected = (challengerId, challengedId, challengeData) => {
-  if (!io) return;
+  if (!io) {
+    log.debug("Socket.IO not available, skipping emitChallengeRejected");
+    return;
+  }
   
   io.to(`user:${challengerId}`).emit("challenge:rejected", {
     ...challengeData,
@@ -142,7 +219,10 @@ const emitChallengeRejected = (challengerId, challengedId, challengeData) => {
  * Emit challenge cancelled event to opponent
  */
 const emitChallengeCancelled = (challengerId, challengedId, challengeData) => {
-  if (!io) return;
+  if (!io) {
+    log.debug("Socket.IO not available, skipping emitChallengeCancelled");
+    return;
+  }
   
   const opponentId = challengerId === challengedId ? challengeData.challengedId : challengeData.challengerId;
   
@@ -161,10 +241,21 @@ const emitChallengeCancelled = (challengerId, challengedId, challengeData) => {
  * Emit score updated event to opponent
  */
 const emitScoreUpdated = (userId, opponentId, challengeId, scoreData) => {
-  if (!io) return;
+  if (!io) {
+    log.debug("Socket.IO not available, skipping emitScoreUpdated");
+    return;
+  }
   
-  // Emit to opponent
+  // Emit to opponent (the one who didn't submit the score)
   io.to(`user:${opponentId}`).emit("challenge:score_updated", {
+    challengeId,
+    userId,
+    ...scoreData,
+    type: "score_updated",
+  });
+  
+  // Also emit to the user who submitted (for immediate UI update)
+  io.to(`user:${userId}`).emit("challenge:score_updated", {
     challengeId,
     userId,
     ...scoreData,
@@ -190,7 +281,10 @@ const emitScoreUpdated = (userId, opponentId, challengeId, scoreData) => {
  * Emit game started event
  */
 const emitGameStarted = (userId, opponentId, challengeId) => {
-  if (!io) return;
+  if (!io) {
+    log.debug("Socket.IO not available, skipping emitGameStarted");
+    return;
+  }
   
   io.to(`user:${opponentId}`).emit("challenge:game_started", {
     challengeId,
@@ -215,7 +309,10 @@ const emitGameStarted = (userId, opponentId, challengeId) => {
  * Emit challenge completed event (both players finished)
  */
 const emitChallengeCompleted = (challengerId, challengedId, challengeData) => {
-  if (!io) return;
+  if (!io) {
+    log.debug("Socket.IO not available, skipping emitChallengeCompleted");
+    return;
+  }
   
   // Emit to both players
   io.to(`user:${challengerId}`).emit("challenge:completed", {
