@@ -111,7 +111,7 @@ const decryptData = (encryptedData, password) => {
       );
     }
 
-    console.log("Decrypting data:", typeof encryptedData, encryptedData);
+    // console.log("Decrypting data:", typeof encryptedData, encryptedData);
 
     if (typeof encryptedData === "string") {
       encryptedData = JSON.parse(encryptedData);

@@ -63,6 +63,8 @@ const updateChallengeInUserIndex = async (
   try {
     const timestamp = Date.now();
 
+    console.log(`🔄 Updating challenge ${challengeId} status to ${status} for users ${challengerId} and ${challengedId}`);
+
     // Update challenger's index
     const challengerRef = ref(
       database,
@@ -72,6 +74,7 @@ const updateChallengeInUserIndex = async (
       status,
       updatedAt: timestamp,
     });
+    console.log(`✅ Updated challenger ${challengerId} index for ${challengeId}`);
 
     // Update challenged user's index
     const challengedRef = ref(
@@ -82,8 +85,9 @@ const updateChallengeInUserIndex = async (
       status,
       updatedAt: timestamp,
     });
+    console.log(`✅ Updated challenged ${challengedId} index for ${challengeId}`);
 
-    console.log(`✅ Updated challenge ${challengeId} status to ${status}`);
+    console.log(`✅ Updated challenge ${challengeId} status to ${status} for both users`);
   } catch (error) {
     console.error("Error updating challenge in user index:", error);
     throw error;

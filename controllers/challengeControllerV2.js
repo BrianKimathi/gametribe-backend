@@ -10,6 +10,9 @@ const {
   remove,
   onValue,
   off,
+  query,
+  orderByChild,
+  equalTo,
 } = require("firebase/database");
 const {
   validateChallengeRequest,
@@ -20,42 +23,21 @@ const {
   removeChallengeFromUserIndex,
   getUserChallengeIds,
 } = require("../utils/challengeIndexer");
-const {
-  getCachedChallenge,
-  setCachedChallenge,
-  getCachedUser,
-  setCachedUser,
-  getCachedChallengeIndex,
-  setCachedChallengeIndex,
-  invalidateChallenge,
-  invalidateUser,
-  invalidateUserChallengeIndexes,
-} = require("../utils/aggressiveCache");
 const { createLogger } = require("../utils/logger");
 const log = createLogger("challenges");
 
-// Import Socket.IO service for real-time updates
-const {
-  emitChallengeCreated,
-  emitChallengeAccepted,
-  emitChallengeRejected,
-  emitScoreUpdated,
-  emitGameStarted,
-  emitChallengeCompleted,
-} = require("../services/socketService");
-
 /**
- * Challenge Controller
- * Handles monetized challenges with wallet integration and real-time updates
+ * Challenge Controller V2 - No Encryption
+ * Optimized for real-time performance
  */
 
-// Generate simple challenge ID
+// Generate a secure challenge ID
 const generateChallengeId = () => {
-  return `challenge_${Date.now()}_${Math.random().toString(36).substring(2, 15)}`;
+  return crypto.randomBytes(16).toString("hex");
 };
 
 /**
- * Create a new challenge
+ * Create a new challenge (NO ENCRYPTION)
  */
 const createChallenge = async (req, res) => {
   try {
@@ -70,9 +52,9 @@ const createChallenge = async (req, res) => {
     } = req.body;
     const challengerId = req.user.uid;
 
-    const rid = req.headers["x-request-id"] || `${Date.now()}-${Math.random()
-      .toString(36)
-      .slice(2, 8)}`;
+    const rid =
+      req.headers["x-request-id"] ||
+      `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const started = Date.now();
     log.info("create:start", {
       rid,
@@ -80,7 +62,7 @@ const createChallenge = async (req, res) => {
       challengedId,
       gameId,
       betAmount,
-      });
+    });
 
     // Validate required fields
     if (!challengedId || !gameId || !gameTitle || !betAmount) {
@@ -92,11 +74,11 @@ const createChallenge = async (req, res) => {
 
     // Validate bet amount
     const bet = parseInt(betAmount);
-    if (isNaN(bet) || bet < 20 || bet > 10000) {
+    if (isNaN(bet) || bet < 10 || bet > 10000) {
       return res.status(400).json({
-        error: "Bet amount must be between 20 and 10,000 KES",
-        });
-      }
+        error: "Bet amount must be between 10 and 10,000 KES",
+      });
+    }
 
     // Check if user is challenging themselves
     if (challengerId === challengedId) {
@@ -170,8 +152,8 @@ const createChallenge = async (req, res) => {
           ) {
             // Allow only if at least one player has submitted their score
             if (
-              existingChallengeData.challengerScore == null &&
-              existingChallengeData.challengedScore == null
+              !existingChallengeData.challengerScore &&
+              !existingChallengeData.challengedScore
             ) {
               return res.status(409).json({
                 error:
@@ -190,13 +172,12 @@ const createChallenge = async (req, res) => {
         error: duplicateCheckError.message,
       });
       // Continue with challenge creation even if duplicate check fails
-      // This prevents blocking challenge creation due to indexing issues
     }
 
     // Generate challenge ID
     const challengeId = generateChallengeId();
 
-    // Create challenge data
+    // Create challenge data (NO ENCRYPTION)
     const challengeData = {
       challengeId,
       challengerId,
@@ -212,7 +193,7 @@ const createChallenge = async (req, res) => {
       expiresAt: Date.now() + 24 * 60 * 60 * 1000, // 24 hours
     };
 
-    // Store challenge as plain JSON
+    // Store challenge directly (unencrypted)
     const challengeRef = ref(database, `challenges/${challengeId}`);
     await set(challengeRef, challengeData);
 
@@ -230,9 +211,6 @@ const createChallenge = async (req, res) => {
       durationMs: Date.now() - started,
     });
 
-    // Emit real-time notification to challenged user
-    emitChallengeCreated(challengerId, challengedId, challengeData);
-
     res.json({
       success: true,
       challengeId,
@@ -248,15 +226,15 @@ const createChallenge = async (req, res) => {
 };
 
 /**
- * Accept a challenge
+ * Accept a challenge (NO ENCRYPTION)
  */
 const acceptChallenge = async (req, res) => {
   try {
     const { challengeId } = req.params;
     const challengedId = req.user.uid;
-    const rid = req.headers["x-request-id"] || `${Date.now()}-${Math.random()
-      .toString(36)
-      .slice(2, 8)}`;
+    const rid =
+      req.headers["x-request-id"] ||
+      `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const started = Date.now();
     log.info("accept:start", { rid, challengeId, challengedId });
 
@@ -268,7 +246,6 @@ const acceptChallenge = async (req, res) => {
       return res.status(404).json({ error: "Challenge not found" });
     }
 
-    // Get challenge data
     const challengeData = challengeSnap.val();
 
     // Validate challenge
@@ -285,28 +262,24 @@ const acceptChallenge = async (req, res) => {
     }
 
     // Update challenge status
-    challengeData.status = "accepted";
-    challengeData.acceptedAt = Date.now();
-
-    // Save updated data
-    await set(challengeRef, challengeData);
+    await update(challengeRef, {
+      status: "accepted",
+      acceptedAt: Date.now(),
+    });
 
     // Update user indexes
     await updateChallengeInUserIndex(
-        challengeId,
+      challengeId,
       challengeData.challengerId,
       challengeData.challengedId,
       "accepted"
     );
 
-    log.info("accept:success", { rid, challengeId, durationMs: Date.now() - started });
-
-    // Emit real-time notification to challenger
-    emitChallengeAccepted(
-      challengeData.challengerId,
-      challengedId,
-      challengeData
-    );
+    log.info("accept:success", {
+      rid,
+      challengeId,
+      durationMs: Date.now() - started,
+    });
 
     res.json({
       success: true,
@@ -322,15 +295,15 @@ const acceptChallenge = async (req, res) => {
 };
 
 /**
- * Reject a challenge
+ * Reject a challenge (NO ENCRYPTION)
  */
 const rejectChallenge = async (req, res) => {
   try {
     const { challengeId } = req.params;
     const challengedId = req.user.uid;
-    const rid = req.headers["x-request-id"] || `${Date.now()}-${Math.random()
-      .toString(36)
-      .slice(2, 8)}`;
+    const rid =
+      req.headers["x-request-id"] ||
+      `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const started = Date.now();
     log.info("reject:start", { rid, challengeId, challengedId });
 
@@ -342,7 +315,6 @@ const rejectChallenge = async (req, res) => {
       return res.status(404).json({ error: "Challenge not found" });
     }
 
-    // Get challenge data
     const challengeData = challengeSnap.val();
 
     // Validate challenge
@@ -355,28 +327,24 @@ const rejectChallenge = async (req, res) => {
     }
 
     // Update challenge status
-    challengeData.status = "rejected";
-    challengeData.rejectedAt = Date.now();
-
-    // Save updated data
-    await set(challengeRef, challengeData);
+    await update(challengeRef, {
+      status: "rejected",
+      rejectedAt: Date.now(),
+    });
 
     // Update user indexes
     await updateChallengeInUserIndex(
-        challengeId,
+      challengeId,
       challengeData.challengerId,
       challengeData.challengedId,
       "rejected"
     );
 
-    log.info("reject:success", { rid, challengeId, durationMs: Date.now() - started });
-
-    // Emit real-time notification to challenger
-    emitChallengeRejected(
-      challengeData.challengerId,
-      challengedId,
-      challengeData
-    );
+    log.info("reject:success", {
+      rid,
+      challengeId,
+      durationMs: Date.now() - started,
+    });
 
     res.json({
       success: true,
@@ -392,15 +360,80 @@ const rejectChallenge = async (req, res) => {
 };
 
 /**
+ * Cancel a challenge (NO ENCRYPTION)
+ */
+const cancelChallenge = async (req, res) => {
+  try {
+    const { challengeId } = req.params;
+    const challengerId = req.user.uid;
+    const rid =
+      req.headers["x-request-id"] ||
+      `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const started = Date.now();
+    log.info("cancel:start", { rid, challengeId, challengerId });
+
+    // Get challenge data
+    const challengeRef = ref(database, `challenges/${challengeId}`);
+    const challengeSnap = await get(challengeRef);
+
+    if (!challengeSnap.exists()) {
+      return res.status(404).json({ error: "Challenge not found" });
+    }
+
+    const challengeData = challengeSnap.val();
+
+    // Validate challenge
+    if (challengeData.challengerId !== challengerId) {
+      return res.status(403).json({ error: "Unauthorized" });
+    }
+
+    if (challengeData.status !== "pending") {
+      return res.status(400).json({ error: "Challenge is not pending" });
+    }
+
+    // Update challenge status
+    await update(challengeRef, {
+      status: "cancelled",
+      cancelledAt: Date.now(),
+    });
+
+    // Update user indexes
+    await updateChallengeInUserIndex(
+      challengeId,
+      challengeData.challengerId,
+      challengeData.challengedId,
+      "cancelled"
+    );
+
+    log.info("cancel:success", {
+      rid,
+      challengeId,
+      durationMs: Date.now() - started,
+    });
+
+    res.json({
+      success: true,
+      message: "Challenge cancelled successfully",
+    });
+  } catch (error) {
+    log.error("cancel:error", { error: error.message });
+    res.status(500).json({
+      error: "Failed to cancel challenge",
+      message: error.message,
+    });
+  }
+};
+
+/**
  * Start a game session
  */
 const startGameSession = async (req, res) => {
   try {
     const { challengeId } = req.body;
     const userId = req.user.uid;
-    const rid = req.headers["x-request-id"] || `${Date.now()}-${Math.random()
-      .toString(36)
-      .slice(2, 8)}`;
+    const rid =
+      req.headers["x-request-id"] ||
+      `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const started = Date.now();
     log.info("session:start", { rid, challengeId, userId });
 
@@ -417,7 +450,6 @@ const startGameSession = async (req, res) => {
       return res.status(404).json({ error: "Challenge not found" });
     }
 
-    // Get challenge data
     const challengeData = challengeSnap.val();
 
     // Validate challenge
@@ -449,7 +481,12 @@ const startGameSession = async (req, res) => {
       expiresAt: Date.now() + 30 * 60 * 1000, // 30 minutes
     });
 
-    log.info("session:success", { rid, challengeId, sessionToken, durationMs: Date.now() - started });
+    log.info("session:success", {
+      rid,
+      challengeId,
+      sessionToken,
+      durationMs: Date.now() - started,
+    });
 
     res.json({
       success: true,
@@ -466,15 +503,15 @@ const startGameSession = async (req, res) => {
 };
 
 /**
- * Submit challenge score
+ * Submit challenge score (NO ENCRYPTION)
  */
 const submitChallengeScore = async (req, res) => {
   try {
     const { challengeId, score, sessionToken } = req.body;
     const userId = req.user.uid;
-    const rid = req.headers["x-request-id"] || `${Date.now()}-${Math.random()
-      .toString(36)
-      .slice(2, 8)}`;
+    const rid =
+      req.headers["x-request-id"] ||
+      `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const started = Date.now();
     log.info("score:start", { rid, challengeId, score, userId });
 
@@ -487,14 +524,14 @@ const submitChallengeScore = async (req, res) => {
         error: "Invalid or expired game session",
         message: "Please restart the game to get a new session token",
       });
-      }
+    }
 
     const sessionData = sessionSnap.val();
     if (
       sessionData.userId !== userId ||
       sessionData.challengeId !== challengeId
-      ) {
-        return res.status(403).json({
+    ) {
+      return res.status(403).json({
         error: "Invalid session",
         message:
           "Session token does not match this challenge. Please restart the game.",
@@ -516,7 +553,6 @@ const submitChallengeScore = async (req, res) => {
       return res.status(404).json({ error: "Challenge not found" });
     }
 
-    // Get challenge data
     const challengeData = challengeSnap.val();
 
     // Validate challenge
@@ -532,34 +568,38 @@ const submitChallengeScore = async (req, res) => {
     }
 
     // Update challenge with score
+    const updates = {};
     if (challengeData.challengerId === userId) {
-      challengeData.challengerScore = score;
+      updates.challengerScore = score;
     } else {
-      challengeData.challengedScore = score;
+      updates.challengedScore = score;
     }
 
     // Check if both scores are submitted
-    if (challengeData.challengerScore != null && challengeData.challengedScore != null) {
-      challengeData.status = "completed";
-      challengeData.completedAt = Date.now();
+    const newChallengerScore =
+      updates.challengerScore ?? challengeData.challengerScore;
+    const newChallengedScore =
+      updates.challengedScore ?? challengeData.challengedScore;
+
+    if (newChallengerScore != null && newChallengedScore != null) {
+      updates.status = "completed";
+      updates.completedAt = Date.now();
 
       // Determine winner
-      if (challengeData.challengerScore > challengeData.challengedScore) {
-        challengeData.winnerId = challengeData.challengerId;
-      } else if (
-        challengeData.challengedScore > challengeData.challengerScore
-      ) {
-        challengeData.winnerId = challengeData.challengedId;
+      if (newChallengerScore > newChallengedScore) {
+        updates.winnerId = challengeData.challengerId;
+      } else if (newChallengedScore > newChallengerScore) {
+        updates.winnerId = challengeData.challengedId;
       } else {
-        challengeData.winnerId = "tie";
+        updates.winnerId = "tie";
       }
     }
 
-    // Save updated data
-    await set(challengeRef, challengeData);
+    // Update challenge data
+    await update(challengeRef, updates);
 
     // Update user indexes for status change
-    if (challengeData.status === "completed") {
+    if (updates.status === "completed") {
       await updateChallengeInUserIndex(
         challengeId,
         challengeData.challengerId,
@@ -571,27 +611,13 @@ const submitChallengeScore = async (req, res) => {
     // Remove session token
     await remove(sessionRef);
 
-    log.info("score:success", { rid, challengeId, score, newStatus: challengeData.status, durationMs: Date.now() - started });
-
-    // Emit real-time score update
-    const opponentId = challengeData.challengerId === userId 
-      ? challengeData.challengedId 
-      : challengeData.challengerId;
-    
-    emitScoreUpdated(userId, opponentId, challengeId, {
-      challengerScore: challengeData.challengerScore,
-      challengedScore: challengeData.challengedScore,
-      isComplete: challengeData.status === "completed",
+    log.info("score:success", {
+      rid,
+      challengeId,
+      score,
+      newStatus: updates.status,
+      durationMs: Date.now() - started,
     });
-
-    // If challenge is completed, emit completion event
-    if (challengeData.status === "completed") {
-      emitChallengeCompleted(
-        challengeData.challengerId,
-        challengeData.challengedId,
-        challengeData
-      );
-    }
 
     res.json({
       success: true,
@@ -607,49 +633,30 @@ const submitChallengeScore = async (req, res) => {
 };
 
 /**
- * Get user's challenge history (OPTIMIZED)
+ * Get challenge history (NO ENCRYPTION - OPTIMIZED)
  */
-// Utility: timeout wrapper to avoid long-hanging awaits
-function withTimeout(promise, ms, label = "operation") {
-  let timeoutId;
-  const timeoutPromise = new Promise((_, reject) => {
-    timeoutId = setTimeout(() => {
-      reject(new Error(`Timeout after ${ms}ms in ${label}`));
-    }, ms);
-  });
-  return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeoutId));
-}
-
 const getChallengeHistory = async (req, res) => {
   try {
     const userId = req.user.uid;
     const { limit = 10, offset = 0, status } = req.query;
 
-  const rid = req.headers["x-request-id"] || `${Date.now()}-${Math.random()
-    .toString(36)
-    .slice(2, 8)}`;
-  const startTime = Date.now();
-  log.info("history:start", { rid, userId, status: status || "all", limit, offset });
+    const rid =
+      req.headers["x-request-id"] ||
+      `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const startTime = Date.now();
+    log.info("history:start", {
+      rid,
+      userId,
+      status: status || "all",
+      limit,
+      offset,
+    });
 
-    // OPTIMIZATION: Use metadata index instead of decrypting all challenges
-    const idsStart = Date.now();
-    const challengeIds = await withTimeout(
-      Promise.resolve(getUserChallengeIds(userId, status)),
-      10000,
-      "getUserChallengeIds"
-    );
-
+    // Get user's challenge IDs from index
+    const challengeIds = await getUserChallengeIds(userId, status);
     log.info("history:ids", { rid, count: challengeIds.length });
 
-    // FALLBACK: If no indexes exist, use the old method for existing challenges
-    if (challengeIds.length === 0) {
-      console.log(
-        "🔄 No challenge indexes found, falling back to legacy method..."
-      );
-      return await getChallengeHistoryLegacy(req, res);
-    }
-
-    // Get only the challenges we need
+    // Only decrypt challenges we need
     const challengesToFetch = challengeIds.slice(
       parseInt(offset),
       parseInt(offset) + parseInt(limit)
@@ -658,12 +665,11 @@ const getChallengeHistory = async (req, res) => {
     const userChallenges = [];
     const uniqueUserIds = new Set();
 
-    // Fetch challenges
-    const fetchStart = Date.now();
+    // Fetch only the challenges we need
     for (const challengeId of challengesToFetch) {
       try {
         const challengeRef = ref(database, `challenges/${challengeId}`);
-        const challengeSnap = await withTimeout(get(challengeRef), 10000, `get_challenges/${challengeId}`);
+        const challengeSnap = await get(challengeRef);
 
         if (!challengeSnap.exists()) continue;
 
@@ -695,15 +701,15 @@ const getChallengeHistory = async (req, res) => {
               ? challengeData.challengedId
               : challengeData.challengerId,
         });
-      } catch (error) {
+      } catch (fetchError) {
         console.warn(
           `Failed to fetch challenge ${challengeId}:`,
-          error.message
+          fetchError.message
         );
       }
     }
 
-    // OPTIMIZATION: Batch fetch user data
+    // Batch fetch user data
     const userDataMap = {};
     if (uniqueUserIds.size > 0) {
       const userPromises = Array.from(uniqueUserIds).map(async (uid) => {
@@ -719,15 +725,21 @@ const getChallengeHistory = async (req, res) => {
             };
           }
         } catch (error) {
-          console.warn(`Failed to fetch user data for ${uid}:`, error.message);
+          console.warn(
+            `Failed to fetch user data for ${uid}:`,
+            error.message
+          );
         }
       });
       await Promise.all(userPromises);
     }
 
-    log.info("history:users_enriched", { rid, users: Object.keys(userDataMap).length, fetchMs: Date.now() - fetchStart });
+    log.info("history:users_enriched", {
+      rid,
+      users: Object.keys(userDataMap).length,
+    });
 
-    // OPTIMIZATION: Enrich challenges with user data
+    // Enrich challenges with user data
     const enrichedChallenges = userChallenges.map((challenge) => {
       const challengerData = userDataMap[challenge.challengerId] || {};
       const challengedData = userDataMap[challenge.challengedId] || {};
@@ -742,10 +754,11 @@ const getChallengeHistory = async (req, res) => {
     });
 
     const elapsed = Date.now() - startTime;
-    log.info("history:success", { rid, items: enrichedChallenges.length, tookMs: elapsed });
-
-    // ULTRA-OPTIMIZATION: Cache the results for future requests
-    setCachedChallengeIndex(userId, status, enrichedChallenges);
+    log.info("history:success", {
+      rid,
+      items: enrichedChallenges.length,
+      tookMs: elapsed,
+    });
 
     return res.json({
       success: true,
@@ -755,148 +768,81 @@ const getChallengeHistory = async (req, res) => {
     });
   } catch (error) {
     log.error("history:error", { error: error.message });
-    // Fail-safe: do not hang frontend; return minimal response
-    try {
-      return res.status(200).json({
-        success: true,
-        data: [],
-        total: 0,
-        hasMore: false,
-        error: error.message,
-      });
-    } catch (_) {
-      return res.status(500).json({ error: "Failed to get challenge history" });
-    }
+    return res.status(500).json({
+      error: "Failed to get challenge history",
+      message: error.message,
+    });
   }
 };
 
 /**
- * Legacy challenge history method (fallback for existing challenges)
+ * Get single challenge details (NO ENCRYPTION)
  */
-const getChallengeHistoryLegacy = async (req, res) => {
+const getChallengeDetails = async (req, res) => {
   try {
+    const { challengeId } = req.params;
     const userId = req.user.uid;
-    const { limit = 10, offset = 0, status } = req.query;
 
-    console.log(`🔍 LEGACY: Fetching challenges for user: ${userId}`);
-    const startTime = Date.now();
+    const challengeRef = ref(database, `challenges/${challengeId}`);
+    const challengeSnap = await get(challengeRef);
 
-    // Get all challenges
-    const challengesRef = ref(database, "challenges");
-    const challengesSnap = await withTimeout(get(challengesRef), 10000, "legacy_get_challenges");
-
-    if (!challengesSnap.exists()) {
-      return res.json({ success: true, data: [], total: 0, hasMore: false });
+    if (!challengeSnap.exists()) {
+      return res.status(404).json({ error: "Challenge not found" });
     }
 
-    const allChallenges = challengesSnap.val();
-    const userChallenges = [];
+    const challengeData = challengeSnap.val();
 
-    // Process challenges
-    for (const [challengeId, challengeData] of Object.entries(allChallenges)) {
+    // Validate authorization
+    if (
+      challengeData.challengerId !== userId &&
+      challengeData.challengedId !== userId
+    ) {
+      return res.status(403).json({ error: "Unauthorized" });
+    }
+
+    // Fetch user data for both players
+    const uniqueUserIds = new Set([
+      challengeData.challengerId,
+      challengeData.challengedId,
+    ]);
+    const userDataMap = {};
+
+    for (const uid of uniqueUserIds) {
       try {
-        // Filter user's challenges
-        if (
-          challengeData.challengerId === userId ||
-          challengeData.challengedId === userId
-        ) {
-          // Filter by status if provided
-          if (status && challengeData.status !== status) {
-            continue;
-          }
-
-          userChallenges.push({
-            challengeId: challengeData.challengeId,
-            challengerId: challengeData.challengerId,
-            challengedId: challengeData.challengedId,
-            gameId: challengeData.gameId,
-            gameTitle: challengeData.gameTitle,
-            gameImage: challengeData.gameImage,
-            gameUrl: challengeData.gameUrl,
-            betAmount: challengeData.betAmount,
-            status: challengeData.status,
-            createdAt: challengeData.createdAt,
-            completedAt: challengeData.completedAt,
-            winnerId: challengeData.winnerId,
-            challengerScore: challengeData.challengerScore,
-            challengedScore: challengeData.challengedScore,
-            isChallenger: challengeData.challengerId === userId,
-            opponentId:
-              challengeData.challengerId === userId
-                ? challengeData.challengedId
-                : challengeData.challengerId,
-          });
+        const userRef = ref(database, `users/${uid}`);
+        const userSnap = await get(userRef);
+        if (userSnap.exists()) {
+          const userData = userSnap.val();
+          userDataMap[uid] = {
+            displayName:
+              userData.displayName || userData.username || "Unknown Player",
+            photoURL: userData.photoURL || userData.avatar || "",
+          };
         }
       } catch (error) {
-        console.warn(
-          `Failed to process challenge ${challengeId}:`,
-          error.message
-        );
+        console.warn(`Failed to fetch user data for ${uid}:`, error.message);
       }
     }
 
-    // Sort by creation date (newest first) and paginate
-    userChallenges.sort((a, b) => b.createdAt - a.createdAt);
-    const paginatedChallenges = userChallenges.slice(
-      parseInt(offset),
-      parseInt(offset) + parseInt(limit)
-    );
-
-    // Enrich with user names (same as main function)
-    const uniqueUserIds = new Set();
-    paginatedChallenges.forEach((challenge) => {
-      uniqueUserIds.add(challenge.challengerId);
-      uniqueUserIds.add(challenge.challengedId);
-    });
-
-    const userDataMap = {};
-    if (uniqueUserIds.size > 0) {
-      const userPromises = Array.from(uniqueUserIds).map(async (uid) => {
-        try {
-          const userRef = ref(database, `users/${uid}`);
-          const userSnap = await get(userRef);
-          if (userSnap.exists()) {
-            const userData = userSnap.val();
-            userDataMap[uid] = {
-              displayName:
-                userData.displayName || userData.username || "Unknown Player",
-              photoURL: userData.photoURL || userData.avatar || "",
-          };
-          }
-        } catch (error) {
-          console.warn(`Failed to fetch user data for ${uid}:`, error.message);
-        }
-      });
-      await Promise.all(userPromises);
-    }
-
-    // Enrich challenges with user data
-    const enrichedChallenges = paginatedChallenges.map((challenge) => {
-      const challengerData = userDataMap[challenge.challengerId] || {};
-      const challengedData = userDataMap[challenge.challengedId] || {};
-
-      return {
-        ...challenge,
-        challengerName: challengerData.displayName || "Unknown Player",
-        challengedName: challengedData.displayName || "Unknown Player",
-        challengerAvatar: challengerData.photoURL || "",
-        challengedAvatar: challengedData.photoURL || "",
-      };
-    });
-
-    const elapsed = Date.now() - startTime;
-    console.log(`⚡ LEGACY Challenge fetch completed in ${elapsed}ms`);
+    // Enrich challenge with user data
+    const enrichedChallenge = {
+      ...challengeData,
+      challengerName:
+        userDataMap[challengeData.challengerId]?.displayName || "Unknown Player",
+      challengedName:
+        userDataMap[challengeData.challengedId]?.displayName || "Unknown Player",
+      challengerAvatar: userDataMap[challengeData.challengerId]?.photoURL || "",
+      challengedAvatar: userDataMap[challengeData.challengedId]?.photoURL || "",
+    };
 
     res.json({
       success: true,
-      data: enrichedChallenges,
-      total: userChallenges.length,
-      hasMore: userChallenges.length > parseInt(offset) + parseInt(limit),
+      challenge: enrichedChallenge,
     });
   } catch (error) {
-    console.error("Error getting challenge history (legacy):", error);
+    log.error("details:error", { error: error.message });
     res.status(500).json({
-      error: "Failed to get challenge history",
+      error: "Failed to get challenge details",
       message: error.message,
     });
   }
@@ -906,7 +852,12 @@ module.exports = {
   createChallenge,
   acceptChallenge,
   rejectChallenge,
+  cancelChallenge,
   startGameSession,
   submitChallengeScore,
   getChallengeHistory,
+  getChallengeDetails,
 };
+
+
+

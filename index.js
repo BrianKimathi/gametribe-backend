@@ -576,13 +576,16 @@ const PORT = process.env.PORT || 5000;
 // Import challenge cleanup service
 const { startCleanupSchedule } = require("./services/challengeCleanup");
 
+// Import Socket.IO service
+const { initializeSocketIO } = require("./services/socketService");
+
 // Note: isFirebaseFunctions is already defined earlier in this file (line ~209)
 
 // Start server (for local development or non-Firebase deployments)
 const startServer = async () => {
   try {
-    // Start server
-    app.listen(PORT, () => {
+    // Start HTTP server
+    const httpServer = app.listen(PORT, () => {
       console.log(`🚀 Server running on port ${PORT}`);
       console.log(`🗄️ Database: Firebase (default)`);
       console.log(`💾 Cache: In-memory (efficient)`);
@@ -590,6 +593,10 @@ const startServer = async () => {
 
       // Start challenge cleanup schedule
       startCleanupSchedule();
+      
+      // Initialize Socket.IO
+      initializeSocketIO(httpServer);
+      console.log("✅ Socket.IO initialized");
     });
   } catch (error) {
     console.error("❌ Failed to start server:", error);

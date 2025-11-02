@@ -123,8 +123,8 @@ function withTimeout(promise, ms, label = "operation") {
   });
   return Promise.race([promise, timeoutPromise])
     .then((result) => {
-      const elapsed = Date.now() - startedAt;
-      console.log(`✅ Completed: ${label} in ${elapsed}ms`);
+      // const elapsed = Date.now() - startedAt;
+      // console.log(`✅ Completed: ${label} in ${elapsed}ms`);
       return result;
     })
     .finally(() => clearTimeout(timeoutId));
@@ -143,15 +143,7 @@ const getPosts = async (req, res) => {
       clanId,
     } = req.query;
 
-    console.log("🔍 GET POSTS - Request received:", {
-      userId,
-      category,
-      clanId,
-      authorId,
-      page,
-      limit,
-      query: req.query,
-    });
+    // console.log("🔍 GET POSTS - Request received:", { userId, category, clanId, authorId, page, limit });
 
     // Fast-fail if Admin credentials are unhealthy to avoid long timeouts
     try {
@@ -209,41 +201,11 @@ const getPosts = async (req, res) => {
       });
     }
 
-    // ✅ NEW: Check cache first (disabled for clan posts to debug)
-    const cacheKey = `posts:${pageNum}:${limitNum}:${category || "all"}:${
-      authorId || "all"
-    }:${clanId || "all"}`;
-
-    // Skip cache for clan posts to debug the issue
-    let cachedPosts = null;
-    if (category !== "clan") {
-      cachedPosts = await cacheService.getPosts(
-        pageNum,
-        limitNum,
-        category,
-        authorId,
-        clanId
-      );
-    }
-
-    if (cachedPosts) {
-      console.log("🔍 Using cached posts:", cachedPosts);
-      monitoringService.trackCacheHit("posts");
-      monitoringService.trackHttpRequest(
-        req.method,
-        req.route?.path || "/api/posts",
-        200,
-        Date.now() - startTime
-      );
-      return res.status(200).json(cachedPosts);
-    }
-
-    monitoringService.trackCacheMiss("posts");
 
     const postsRef = database.ref("posts");
-    console.log("🗄️ Posts DB path:", postsRef.toString());
+    // console.log("🗄️ Posts DB path:", postsRef.toString());
     let query = postsRef.orderByChild("createdAt");
-    console.log("🔎 Building posts query ordered by 'createdAt'");
+    // console.log("🔎 Building posts query ordered by 'createdAt'");
 
     // ✅ NEW: Implement pagination with cursor-based approach
     if (lastPostId) {
@@ -264,7 +226,7 @@ const getPosts = async (req, res) => {
     // Limit results - get more than needed to account for filtering
     query = query.limitToLast(limitNum * 2); // Get more posts to account for filtering
 
-    console.log("🚀 Executing posts query (limitToLast=", limitNum * 2, ") ...");
+    // console.log("🚀 Executing posts query (limitToLast=", limitNum * 2, ") ...");
     const snapshot = await withTimeout(
       query.once("value"),
       12000,
@@ -272,22 +234,7 @@ const getPosts = async (req, res) => {
     );
     const postsData = snapshot.val() || {};
 
-    console.log(
-      "🔍 Raw posts data from database:",
-      Object.keys(postsData).length,
-      "posts"
-    );
-    console.log(
-      "🔍 Sample posts:",
-      Object.entries(postsData)
-        .slice(0, 3)
-        .map(([id, data]) => ({
-          id,
-          category: data.category,
-          clanId: data.clanId,
-          author: data.author,
-        }))
-    );
+    // console.log("🔍 Raw posts data from database:", Object.keys(postsData).length, "posts");
 
     // Convert to array and sort
     let posts = Object.entries(postsData).map(([id, data]) => ({
@@ -315,25 +262,21 @@ const getPosts = async (req, res) => {
 
     // ✅ Filter out deleted posts before any other filtering
     posts = posts.filter((post) => !post.isDeleted);
-    console.log("🔍 Posts after removing deleted posts:", posts.length);
+    // console.log("🔍 Posts after removing deleted posts:", posts.length);
 
     // ✅ NEW: Apply filters first
     if (category) {
-      console.log("🔍 Filtering posts by category:", category);
-      console.log("🔍 Total posts before category filtering:", posts.length);
+      // console.log("🔍 Filtering posts by category:", category);
+      // console.log("🔍 Total posts before category filtering:", posts.length);
       if (category === "community") {
         // Include posts with no category set (legacy) and exclude only explicit clan posts
         posts = posts.filter((post) => (post.category || "community") !== "clan");
       } else if (category === "clan") {
         posts = posts.filter((post) => post.category === "clan");
       } else {
-        posts = posts.filter((post) => post.category === category);
+      posts = posts.filter((post) => post.category === category);
       }
-      console.log("🔍 Posts after category filtering:", posts.length);
-      console.log(
-        "🔍 Category filtered posts:",
-        posts.map((p) => ({ id: p.id, category: p.category, clanId: p.clanId }))
-      );
+      // console.log("🔍 Posts after category filtering:", posts.length);
     }
 
     if (authorId) {
@@ -341,31 +284,12 @@ const getPosts = async (req, res) => {
     }
 
     if (clanId) {
-      console.log(
-        "🔍 Filtering posts by clanId:",
-        clanId,
-        "type:",
-        typeof clanId
-      );
-      console.log("🔍 Total posts before filtering:", posts.length);
+      // console.log("🔍 Filtering posts by clanId:", clanId);
       posts = posts.filter((post) => {
         const postClanId = post.clanId;
-        const matches = String(postClanId) === String(clanId);
-        console.log("🔍 Post clanId comparison:", {
-          postId: post.id,
-          postClanId,
-          postClanIdType: typeof postClanId,
-          filterClanId: clanId,
-          filterClanIdType: typeof clanId,
-          matches,
-        });
-        return matches;
+        return String(postClanId) === String(clanId);
       });
-      console.log("🔍 Posts after clanId filtering:", posts.length);
-      console.log(
-        "🔍 Filtered posts:",
-        posts.map((p) => ({ id: p.id, clanId: p.clanId, category: p.category }))
-      );
+      // console.log("🔍 Posts after clanId filtering:", posts.length);
     }
 
     // ✅ NEW: Apply pagination after filtering
@@ -384,18 +308,6 @@ const getPosts = async (req, res) => {
         lastPostId: posts.length > 0 ? posts[posts.length - 1].id : null,
       },
     };
-
-    // ✅ NEW: Cache the results (skip for clan posts to debug)
-    if (category !== "clan") {
-      await cacheService.setPosts(
-        response,
-        pageNum,
-        limitNum,
-        category,
-        authorId,
-        clanId
-      );
-    }
 
     // ✅ NEW: Track metrics
     monitoringService.trackDatabaseOperation(
@@ -869,10 +781,6 @@ const createPost = async (req, res) => {
 
     await database.ref(`posts/${postId}`).set(newPost);
     console.log("✅ Post created successfully:", postId);
-
-    // ✅ NEW: Invalidate cache
-    await cacheService.invalidatePosts();
-    await cacheService.setPost(postId, newPost);
 
     // ✅ NEW: Track metrics
     monitoringService.trackPostCreated(newPost.category, "regular");

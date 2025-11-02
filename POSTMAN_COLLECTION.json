@@ -1,0 +1,186 @@
+{
+  "info": {
+    "name": "GameTribe Challenge API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "1. Get Challenge History",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/history?limit=20&offset=0",
+          "host": ["{{baseUrl}}"],
+          "path": ["history"],
+          "query": [
+            { "key": "limit", "value": "20" },
+            { "key": "offset", "value": "0" }
+          ]
+        }
+      }
+    },
+    {
+      "name": "2. Get Challenge Details",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/88991f1ceae6200413d4dd815fa666c6",
+          "host": ["{{baseUrl}}"],
+          "path": ["88991f1ceae6200413d4dd815fa666c6"]
+        }
+      }
+    },
+    {
+      "name": "3. Create Challenge",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"challengedId\": \"XGRmAbJSRqNavfD2DWVXhur5xmi2\",\n  \"gameId\": \"i4sCHI92PjQAvWbhZyTE\",\n  \"gameTitle\": \"Flappy Bird\",\n  \"gameImage\": \"https://storage.googleapis.com/gametibe2025.firebasestorage.app/gametribe/games/images/3f68bbda-c555-4380-b714-b3634f7b78b1-Flappy-Bird-2024-900x900.jpg\",\n  \"gameUrl\": \"https://gam3nyt.web.app/flappy\",\n  \"betAmount\": 20,\n  \"message\": \"Let's play!\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/create",
+          "host": ["{{baseUrl}}"],
+          "path": ["create"]
+        }
+      }
+    },
+    {
+      "name": "4. Accept Challenge",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/accept/88991f1ceae6200413d4dd815fa666c6",
+          "host": ["{{baseUrl}}"],
+          "path": ["accept", "88991f1ceae6200413d4dd815fa666c6"]
+        }
+      }
+    },
+    {
+      "name": "5. Reject Challenge",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/reject/88991f1ceae6200413d4dd815fa666c6",
+          "host": ["{{baseUrl}}"],
+          "path": ["reject", "88991f1ceae6200413d4dd815fa666c6"]
+        }
+      }
+    },
+    {
+      "name": "6. Cancel Challenge (DELETE)",
+      "request": {
+        "method": "DELETE",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/88991f1ceae6200413d4dd815fa666c6",
+          "host": ["{{baseUrl}}"],
+          "path": ["88991f1ceae6200413d4dd815fa666c6"]
+        }
+      }
+    },
+    {
+      "name": "7. Start Game Session",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"challengeId\": \"88991f1ceae6200413d4dd815fa666c6\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/start-session",
+          "host": ["{{baseUrl}}"],
+          "path": ["start-session"]
+        }
+      }
+    },
+    {
+      "name": "8. Submit Score",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{token}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"challengeId\": \"88991f1ceae6200413d4dd815fa666c6\",\n  \"score\": 10,\n  \"sessionToken\": \"{{sessionToken}}\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/score",
+          "host": ["{{baseUrl}}"],
+          "path": ["score"]
+        }
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:5000/api/challenges"
+    },
+    {
+      "key": "token",
+      "value": "eyJhbGciOiJSUzI1NiIsImtpZCI6IjU0NTEzMjA5OWFkNmJmNjEzODJiNmI0Y2RlOWEyZGZlZDhjYjMwZjAiLCJ0eXAiOiJKV1QifQ.eyJuYW1lIjoiSm9obiBQcmVzdG9uIiwicGljdHVyZSI6Imh0dHBzOi8vbGgzLmdvb2dsZXVzZXJjb250ZW50LmNvbS9hL0FDZzhvY0tvWUIzQlQ2a2Y0M184ZFNFQXRDZTRVZy1CbXY3NnFIcTlldnFQOEFVTEJpck0xUT1zOTYtYyIsImlzcyI6Imh0dHBzOi8vc2VjdXJldG9rZW4uZ29vZ2xlLmNvbS9nYW1ldGliZTIwMjUiLCJhdWQiOiJnYW1ldGliZTIwMjUiLCJhdXRoX3RpbWUiOjE3NjE5NDY3OTcsInVzZXJfaWQiOiJSa3J4dUVOWmxBUHNaUXRwVFVLRHRIaDVraXEyIiwic3ViIjoiUmtyeHVFTlpsQVBzWlF0cFRVS0R0SGg1a2lxMiIsImlhdCI6MTc2MTk0NjkyMiwiZXhwIjoxNzYxOTUwNTIyLCJlbWFpbCI6ImpvaG5wcmVzdG9uMjcwQGdtYWlsLmNvbSIsImVtYWlsX3ZlcmlmaWVkIjp0cnVlLCJmaXJlYmFzZSI6eyJpZGVudGl0aWVzIjp7Imdvb2dsZS5jb20iOlsiMTEwNDk1ODI3NTEzNzMyMTM5NTg0Il0sImVtYWlsIjpbImpvaG5wcmVzdG9uMjcwQGdtYWlsLmNvbSJdfSwic2lnbl9pbl9wcm92aWRlciI6Imdvb2dsZS5jb20ifX0.MY7sVWEykMkbF48_njNLC0L2jO3XeO884t9cLauOE_MkTe6Cw7ql6_oOC9U6JViGGoroDP8lCA2mGPN7Jqk3o_wdbpDoQBo5_SPwO8TK_IpwhBFabEx9cBXBhJ-icBop1OcAjoDQdS1uLOq9tr2jZyPAXRLAcJ5W3RirHt6nlVuutOpnbSIHTbqGtqfh_WntTkvrXZWrON5X8D10LMbp3Rc9UKu4X1tuy-ED0FYswzgOkE0eW3o0Ks-duHFK7WGNOZslmz7SPj2eL_nXbkm_igEimC3ew1QJYou_hhRHzsdAMKGtmBFhhcQ_s234sxZoVBxtSH5vxFyyQASOQpJJbA"
+    },
+    {
+      "key": "sessionToken",
+      "value": ""
+    }
+  ]
+}

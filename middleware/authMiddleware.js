@@ -8,12 +8,19 @@ const verifyToken = async (req, res, next) => {
     }
     const token = authHeader.split("Bearer ")[1];
 
+    // DEBUG: Log the full token for debugging
+    console.log('[AUTH] 🔐 Full token received:', token);
+    console.log('[AUTH] 🔐 Token length:', token.length);
+    console.log('[AUTH] 🔐 URL:', req.originalUrl);
+    console.log('[AUTH] 🔐 Method:', req.method);
+
     if (!auth) {
       console.error("Firebase Admin auth module is not initialized");
       return res.status(500).json({ error: "Server configuration error" });
     }
     
     const decodedToken = await auth.verifyIdToken(token);
+    console.log('[AUTH] ✅ Token verified successfully for user:', decodedToken.uid);
     req.user = decodedToken;
     next();
   } catch (error) {
