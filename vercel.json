@@ -13,6 +13,21 @@
     }
   ],
   "env": {
-    "NODE_ENV": "production"
+    "NODE_ENV": "production",
+    "DISABLE_RATE_LIMITING": "false",
+    "MOBILE_APP_SECRET": "gametribe-mobile-2025",
+    "ALLOWED_ORIGINS": "https://hub.gametribe.com,https://gametribe.com,https://gametibe2025.web.app,https://gametibe2025.firebaseapp.com,https://community-gametribe.web.app,https://community-gametribe.firebaseapp.com",
+    "EMAIL_SERVICE": "gmail",
+    "EMAIL_USER": "henrydave0480@gmail.com",
+    "EMAIL_PASSWORD": "kpzh bmgi njci biyj",
+    "FIREBASE_PROJECT_ID": "gametibe2025",
+    "FIREBASE_DATABASE_URL": "https://gametibe2025-default-rtdb.firebaseio.com",
+    "FIREBASE_STORAGE_BUCKET": "gametibe2025.firebasestorage.app"
+  },
+  "functions": {
+    "index.js": {
+      "maxDuration": 30,
+      "memory": 1024
+    }
   }
 }

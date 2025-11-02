@@ -625,11 +625,13 @@ const startServer = async () => {
 // isFirebaseFunctions is already defined earlier in the file
 if (process.env.VERCEL) {
   // Vercel serverless environment
-  // Note: Socket.IO WebSockets don't work on Vercel serverless
-  // Socket.IO will fall back to polling-only mode
+  // Note: Socket.IO doesn't work on Vercel serverless (neither WebSockets nor polling)
+  // because serverless functions are stateless and isolated
+  // REST API endpoints work fine, but real-time Socket.IO features are disabled
+  // For real-time features, use Firebase Realtime Database listeners or deploy Socket.IO on a persistent server
   module.exports = app;
   console.log("✅ Backend configured for Vercel (serverless)");
-  console.log("⚠️ Socket.IO WebSockets disabled - using polling only");
+  console.log("⚠️ Socket.IO disabled - REST API only. Real-time requires persistent server.");
 } else if (isFirebaseFunctions) {
   // Firebase Functions environment
   const functions = require("firebase-functions/v2");
