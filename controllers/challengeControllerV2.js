@@ -219,6 +219,25 @@ const createChallenge = async (req, res) => {
       durationMs: Date.now() - started,
     });
 
+    // Emit realtime to both players
+    try {
+      const payload = {
+        challengeId,
+        challengerId,
+        challengedId,
+        gameId,
+        gameTitle,
+        gameImage: challengeData.gameImage,
+        betAmount: bet,
+        status: "pending",
+        createdAt: challengeData.createdAt,
+      };
+      const { emitChallengeCreated } = require("../services/socketService");
+      emitChallengeCreated(challengerId, challengedId, payload);
+    } catch (e) {
+      log.warn("realtime_emit:create:warn", { error: e.message });
+    }
+
     res.json({
       success: true,
       challengeId,
@@ -289,6 +308,27 @@ const acceptChallenge = async (req, res) => {
       durationMs: Date.now() - started,
     });
 
+    // Emit accepted to challenger
+    try {
+      const payload = {
+        challengeId,
+        challengerId: challengeData.challengerId,
+        challengedId: challengeData.challengedId,
+        gameId: challengeData.gameId,
+        gameTitle: challengeData.gameTitle,
+        betAmount: challengeData.betAmount,
+        acceptedAt: Date.now(),
+      };
+      const { emitChallengeAccepted } = require("../services/socketService");
+      emitChallengeAccepted(
+        challengeData.challengerId,
+        challengeData.challengedId,
+        payload
+      );
+    } catch (e) {
+      log.warn("realtime_emit:accept:warn", { error: e.message });
+    }
+
     res.json({
       success: true,
       message: "Challenge accepted successfully",
@@ -354,6 +394,27 @@ const rejectChallenge = async (req, res) => {
       durationMs: Date.now() - started,
     });
 
+    // Emit rejected to challenger
+    try {
+      const payload = {
+        challengeId,
+        challengerId: challengeData.challengerId,
+        challengedId: challengeData.challengedId,
+        gameId: challengeData.gameId,
+        gameTitle: challengeData.gameTitle,
+        betAmount: challengeData.betAmount,
+        rejectedAt: Date.now(),
+      };
+      const { emitChallengeRejected } = require("../services/socketService");
+      emitChallengeRejected(
+        challengeData.challengerId,
+        challengeData.challengedId,
+        payload
+      );
+    } catch (e) {
+      log.warn("realtime_emit:reject:warn", { error: e.message });
+    }
+
     res.json({
       success: true,
       message: "Challenge rejected successfully",
@@ -418,6 +479,27 @@ const cancelChallenge = async (req, res) => {
       challengeId,
       durationMs: Date.now() - started,
     });
+
+    // Emit cancelled to opponent
+    try {
+      const payload = {
+        challengeId,
+        challengerId: challengeData.challengerId,
+        challengedId: challengeData.challengedId,
+        gameId: challengeData.gameId,
+        gameTitle: challengeData.gameTitle,
+        betAmount: challengeData.betAmount,
+        cancelledAt: Date.now(),
+      };
+      const { emitChallengeCancelled } = require("../services/socketService");
+      emitChallengeCancelled(
+        challengeData.challengerId,
+        challengeData.challengedId,
+        payload
+      );
+    } catch (e) {
+      log.warn("realtime_emit:cancel:warn", { error: e.message });
+    }
 
     res.json({
       success: true,
