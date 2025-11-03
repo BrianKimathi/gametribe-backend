@@ -9,6 +9,8 @@ const {
   submitChallengeScore,
   getChallengeHistory,
 } = require("../controllers/challengeController");
+// Use V2 cancel (implemented here)
+const { cancelChallenge } = require("../controllers/challengeControllerV2");
 const {
   validateChallengeRequest,
   validateScoreSubmission,
@@ -77,5 +79,8 @@ router.post(
 
 // Get user's challenge history
 router.get("/history", authenticateToken, getChallengeHistory);
+
+// Cancel a pending challenge (only challenger)
+router.delete("/:challengeId", authenticateToken, cancelChallenge);
 
 module.exports = router;

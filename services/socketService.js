@@ -1,8 +1,33 @@
 const { Server } = require("socket.io");
 const { createLogger } = require("../utils/logger");
+const axios = require("axios");
 const log = createLogger("socket");
 
 let io = null;
+
+// Optional: external sockets relay (Render)
+const SOCKETS_EMIT_URL = process.env.SOCKETS_EMIT_URL || ""; // e.g., https://your-sockets.onrender.com
+const SOCKETS_INTERNAL_SECRET = process.env.SOCKETS_INTERNAL_SECRET || "";
+
+async function relayEmit(path, payload) {
+  if (!SOCKETS_EMIT_URL || !SOCKETS_INTERNAL_SECRET) {
+    return false;
+  }
+  try {
+    const url = `${SOCKETS_EMIT_URL.replace(/\/$/, "")}${path}`;
+    await axios.post(url, payload, {
+      headers: {
+        "Content-Type": "application/json",
+        "X-Internal-Secret": SOCKETS_INTERNAL_SECRET,
+      },
+      timeout: 8000,
+    });
+    return true;
+  } catch (err) {
+    log.error("Failed to relay emit", { path, error: err.message });
+    return false;
+  }
+}
 
 /**
  * Initialize Socket.IO server
@@ -152,7 +177,15 @@ const initializeSocketIO = (httpServer) => {
  */
 const emitChallengeCreated = (challengerId, challengedId, challengeData) => {
   if (!io) {
-    log.debug("Socket.IO not available, skipping emitChallengeCreated");
+    log.debug("Socket.IO not available, attempting relay: emitChallengeCreated");
+    relayEmit("/emit/challenge-created", {
+      challengerId,
+      challengedId,
+      data: {
+        ...challengeData,
+        type: "challenge_created",
+      },
+    });
     return;
   }
   
@@ -173,6 +206,12 @@ const emitChallengeCreated = (challengerId, challengedId, challengeData) => {
     challengedId,
     challengeId: challengeData.challengeId,
   });
+  // Also relay to external sockets (Render)
+  relayEmit("/emit/challenge-created", {
+    challengerId,
+    challengedId,
+    data: { ...challengeData, type: "challenge_created" },
+  });
 };
 
 /**
@@ -180,7 +219,15 @@ const emitChallengeCreated = (challengerId, challengedId, challengeData) => {
  */
 const emitChallengeAccepted = (challengerId, challengedId, challengeData) => {
   if (!io) {
-    log.debug("Socket.IO not available, skipping emitChallengeAccepted");
+    log.debug("Socket.IO not available, attempting relay: emitChallengeAccepted");
+    relayEmit("/emit/challenge-accepted", {
+      challengerId,
+      challengedId,
+      data: {
+        ...challengeData,
+        type: "challenge_accepted",
+      },
+    });
     return;
   }
   
@@ -193,6 +240,12 @@ const emitChallengeAccepted = (challengerId, challengedId, challengeData) => {
     challengerId,
     challengeId: challengeData.challengeId,
   });
+  // Also relay
+  relayEmit("/emit/challenge-accepted", {
+    challengerId,
+    challengedId,
+    data: { ...challengeData, type: "challenge_accepted" },
+  });
 };
 
 /**
@@ -200,7 +253,15 @@ const emitChallengeAccepted = (challengerId, challengedId, challengeData) => {
  */
 const emitChallengeRejected = (challengerId, challengedId, challengeData) => {
   if (!io) {
-    log.debug("Socket.IO not available, skipping emitChallengeRejected");
+    log.debug("Socket.IO not available, attempting relay: emitChallengeRejected");
+    relayEmit("/emit/challenge-rejected", {
+      challengerId,
+      challengedId,
+      data: {
+        ...challengeData,
+        type: "challenge_rejected",
+      },
+    });
     return;
   }
   
@@ -212,6 +273,12 @@ const emitChallengeRejected = (challengerId, challengedId, challengeData) => {
   log.info("Challenge rejected event emitted", {
     challengerId,
     challengeId: challengeData.challengeId,
+  });
+  // Also relay
+  relayEmit("/emit/challenge-rejected", {
+    challengerId,
+    challengedId,
+    data: { ...challengeData, type: "challenge_rejected" },
   });
 };
 
@@ -242,7 +309,16 @@ const emitChallengeCancelled = (challengerId, challengedId, challengeData) => {
  */
 const emitScoreUpdated = (userId, opponentId, challengeId, scoreData) => {
   if (!io) {
-    log.debug("Socket.IO not available, skipping emitScoreUpdated");
+    log.debug("Socket.IO not available, attempting relay: emitScoreUpdated");
+    relayEmit("/emit/score-updated", {
+      userId,
+      opponentId,
+      challengeId,
+      data: {
+        ...scoreData,
+        type: "score_updated",
+      },
+    });
     return;
   }
   
@@ -274,6 +350,13 @@ const emitScoreUpdated = (userId, opponentId, challengeId, scoreData) => {
     userId,
     opponentId,
     challengeId,
+  });
+  // Also relay
+  relayEmit("/emit/score-updated", {
+    userId,
+    opponentId,
+    challengeId,
+    data: { ...scoreData, type: "score_updated" },
   });
 };
 
@@ -310,7 +393,15 @@ const emitGameStarted = (userId, opponentId, challengeId) => {
  */
 const emitChallengeCompleted = (challengerId, challengedId, challengeData) => {
   if (!io) {
-    log.debug("Socket.IO not available, skipping emitChallengeCompleted");
+    log.debug("Socket.IO not available, attempting relay: emitChallengeCompleted");
+    relayEmit("/emit/challenge-completed", {
+      challengerId,
+      challengedId,
+      data: {
+        ...challengeData,
+        type: "challenge_completed",
+      },
+    });
     return;
   }
   
@@ -335,6 +426,12 @@ const emitChallengeCompleted = (challengerId, challengedId, challengeData) => {
     challengerId,
     challengedId,
     challengeId: challengeData.challengeId,
+  });
+  // Also relay
+  relayEmit("/emit/challenge-completed", {
+    challengerId,
+    challengedId,
+    data: { ...challengeData, type: "challenge_completed" },
   });
 };
 
