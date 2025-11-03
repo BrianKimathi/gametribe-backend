@@ -25,6 +25,14 @@ const {
 } = require("../utils/challengeIndexer");
 const { createLogger } = require("../utils/logger");
 const log = createLogger("challenges");
+const {
+  emitScoreUpdated,
+  emitChallengeCompleted,
+} = require("../services/socketService");
+const {
+  sendScoreUpdatedNotification,
+  sendChallengeCompletedNotification,
+} = require("../services/fcmService");
 
 /**
  * Challenge Controller V2 - No Encryption
@@ -619,10 +627,78 @@ const submitChallengeScore = async (req, res) => {
       durationMs: Date.now() - started,
     });
 
-    res.json({
-      success: true,
-      message: "Score submitted successfully",
-    });
+    // Emit real-time updates
+    try {
+      const opponentId =
+        challengeData.challengerId === userId
+          ? challengeData.challengedId
+          : challengeData.challengerId;
+
+      emitScoreUpdated(userId, opponentId, challengeId, {
+        challengerScore:
+          updates.challengerScore ?? challengeData.challengerScore,
+        challengedScore:
+          updates.challengedScore ?? challengeData.challengedScore,
+        isComplete: updates.status === "completed",
+        winnerId: updates.winnerId,
+      });
+
+      // Send FCM for score update if not yet completed
+      if (updates.status !== "completed") {
+        sendScoreUpdatedNotification(opponentId, userId, {
+          ...challengeData,
+          challengerScore:
+            updates.challengerScore ?? challengeData.challengerScore,
+          challengedScore:
+            updates.challengedScore ?? challengeData.challengedScore,
+        }).catch((err) =>
+          log.error("FCM score notification failed", { error: err.message })
+        );
+      }
+
+      // If challenge completed, emit completion + FCM to both players
+      if (updates.status === "completed") {
+        const completionPayload = {
+          ...challengeData,
+          challengerScore:
+            updates.challengerScore ?? challengeData.challengerScore,
+          challengedScore:
+            updates.challengedScore ?? challengeData.challengedScore,
+          winnerId: updates.winnerId,
+          completedAt: updates.completedAt,
+        };
+        emitChallengeCompleted(
+          challengeData.challengerId,
+          challengeData.challengedId,
+          completionPayload
+        );
+
+        // Notify both participants
+        const a = sendChallengeCompletedNotification(
+          challengeData.challengerId,
+          challengeData.challengedId,
+          completionPayload
+        ).catch((err) =>
+          log.error("FCM completion notify (challenger) failed", {
+            error: err.message,
+          })
+        );
+        const b = sendChallengeCompletedNotification(
+          challengeData.challengedId,
+          challengeData.challengerId,
+          completionPayload
+        ).catch((err) =>
+          log.error("FCM completion notify (challenged) failed", {
+            error: err.message,
+          })
+        );
+        await Promise.allSettled([a, b]);
+      }
+    } catch (emitErr) {
+      log.error("realtime_emit:error", { error: emitErr.message });
+    }
+
+    res.json({ success: true, message: "Score submitted successfully" });
   } catch (error) {
     log.error("score:error", { error: error.message });
     res.status(500).json({
@@ -725,10 +801,7 @@ const getChallengeHistory = async (req, res) => {
             };
           }
         } catch (error) {
-          console.warn(
-            `Failed to fetch user data for ${uid}:`,
-            error.message
-          );
+          console.warn(`Failed to fetch user data for ${uid}:`, error.message);
         }
       });
       await Promise.all(userPromises);
@@ -828,9 +901,11 @@ const getChallengeDetails = async (req, res) => {
     const enrichedChallenge = {
       ...challengeData,
       challengerName:
-        userDataMap[challengeData.challengerId]?.displayName || "Unknown Player",
+        userDataMap[challengeData.challengerId]?.displayName ||
+        "Unknown Player",
       challengedName:
-        userDataMap[challengeData.challengedId]?.displayName || "Unknown Player",
+        userDataMap[challengeData.challengedId]?.displayName ||
+        "Unknown Player",
       challengerAvatar: userDataMap[challengeData.challengerId]?.photoURL || "",
       challengedAvatar: userDataMap[challengeData.challengedId]?.photoURL || "",
     };
@@ -858,8 +933,3 @@ module.exports = {
   getChallengeHistory,
   getChallengeDetails,
 };
-
-
-
-
-
