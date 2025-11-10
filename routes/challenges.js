@@ -88,15 +88,15 @@ router.post(
 // Get user's challenge history
 router.get("/history", authenticateToken, getChallengeHistory);
 
-// Cancel a pending challenge (only challenger)
-router.delete("/:challengeId", authenticateToken, cancelChallenge);
-
-// Challenge reactions
+// Challenge reactions (must be before /:challengeId route)
 router.post("/:challengeId/reactions", authenticateToken, addReaction);
 router.get("/:challengeId/reactions", authenticateToken, getReactions);
 
-// Challenge messages (in-game chat)
+// Challenge messages (in-game chat) (must be before /:challengeId route)
 router.post("/:challengeId/messages", authenticateToken, sendMessage);
 router.get("/:challengeId/messages", authenticateToken, getMessages);
+
+// Cancel a pending challenge (only challenger) - must be last
+router.delete("/:challengeId", authenticateToken, cancelChallenge);
 
 module.exports = router;
