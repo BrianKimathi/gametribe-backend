@@ -551,6 +551,13 @@ const startGameSession = async (req, res) => {
     }
 
     if (challengeData.status !== "accepted") {
+      log.warn("session:invalid_status", {
+        rid,
+        challengeId,
+        userId,
+        currentStatus: challengeData.status,
+        expectedStatus: "accepted",
+      });
       return res.status(400).json({
         error: "Challenge is not accepted",
         currentStatus: challengeData.status,
@@ -558,6 +565,14 @@ const startGameSession = async (req, res) => {
           "Please ensure the challenge has been accepted before starting the game",
       });
     }
+
+    log.info("session:challenge_validated", {
+      rid,
+      challengeId,
+      userId,
+      challengerId: challengeData.challengerId,
+      challengedId: challengeData.challengedId,
+    });
 
     // Generate session token
     const sessionToken = crypto.randomBytes(32).toString("hex");
@@ -610,6 +625,12 @@ const submitChallengeScore = async (req, res) => {
     const sessionSnap = await get(sessionRef);
 
     if (!sessionSnap.exists()) {
+      log.warn("score:session_not_found", {
+        rid,
+        challengeId,
+        sessionToken: sessionToken?.substring(0, 8) + "...",
+        userId,
+      });
       return res.status(403).json({
         error: "Invalid or expired game session",
         message: "Please restart the game to get a new session token",
@@ -621,6 +642,13 @@ const submitChallengeScore = async (req, res) => {
       sessionData.userId !== userId ||
       sessionData.challengeId !== challengeId
     ) {
+      log.warn("score:session_mismatch", {
+        rid,
+        challengeId,
+        userId,
+        sessionUserId: sessionData.userId,
+        sessionChallengeId: sessionData.challengeId,
+      });
       return res.status(403).json({
         error: "Invalid session",
         message:
@@ -629,11 +657,25 @@ const submitChallengeScore = async (req, res) => {
     }
 
     if (Date.now() > sessionData.expiresAt) {
+      log.warn("score:session_expired", {
+        rid,
+        challengeId,
+        userId,
+        expiresAt: sessionData.expiresAt,
+        now: Date.now(),
+      });
       return res.status(403).json({
         error: "Session expired",
         message: "Game session has expired. Please restart the game.",
       });
     }
+
+    log.info("score:session_validated", {
+      rid,
+      challengeId,
+      userId,
+      sessionAge: Date.now() - sessionData.createdAt,
+    });
 
     // Get challenge data
     const challengeRef = ref(database, `challenges/${challengeId}`);
@@ -650,19 +692,62 @@ const submitChallengeScore = async (req, res) => {
       challengeData.challengerId !== userId &&
       challengeData.challengedId !== userId
     ) {
+      log.warn("score:unauthorized", {
+        rid,
+        challengeId,
+        userId,
+        challengerId: challengeData.challengerId,
+        challengedId: challengeData.challengedId,
+      });
       return res.status(403).json({ error: "Unauthorized" });
     }
 
     if (challengeData.status !== "accepted") {
-      return res.status(400).json({ error: "Challenge is not accepted" });
+      log.warn("score:invalid_status", {
+        rid,
+        challengeId,
+        userId,
+        currentStatus: challengeData.status,
+        expectedStatus: "accepted",
+      });
+      return res.status(400).json({
+        error: "Challenge is not accepted",
+        currentStatus: challengeData.status,
+        message: "Please ensure the challenge has been accepted before starting the game",
+      });
     }
+
+    log.info("score:challenge_validated", {
+      rid,
+      challengeId,
+      userId,
+      currentScores: {
+        challenger: challengeData.challengerScore,
+        challenged: challengeData.challengedScore,
+      },
+    });
 
     // Update challenge with score
     const updates = {};
-    if (challengeData.challengerId === userId) {
+    const isChallenger = challengeData.challengerId === userId;
+    if (isChallenger) {
       updates.challengerScore = score;
+      log.info("score:updating_challenger", {
+        rid,
+        challengeId,
+        userId,
+        score,
+        previousScore: challengeData.challengerScore,
+      });
     } else {
       updates.challengedScore = score;
+      log.info("score:updating_challenged", {
+        rid,
+        challengeId,
+        userId,
+        score,
+        previousScore: challengeData.challengedScore,
+      });
     }
 
     // Check if both scores are submitted
@@ -683,22 +768,63 @@ const submitChallengeScore = async (req, res) => {
       } else {
         updates.winnerId = "tie";
       }
+
+      log.info("score:challenge_completing", {
+        rid,
+        challengeId,
+        finalScores: {
+          challenger: newChallengerScore,
+          challenged: newChallengedScore,
+        },
+        winnerId: updates.winnerId,
+      });
+    } else {
+      log.info("score:partial_submission", {
+        rid,
+        challengeId,
+        challengerScore: newChallengerScore,
+        challengedScore: newChallengedScore,
+        waitingFor: newChallengerScore == null ? "challenger" : "challenged",
+      });
     }
 
     // Update challenge data
+    log.info("score:updating_database", {
+      rid,
+      challengeId,
+      updates,
+    });
     await update(challengeRef, updates);
+    log.info("score:database_updated", {
+      rid,
+      challengeId,
+      updatesApplied: Object.keys(updates),
+    });
 
     // Update user indexes for status change
     if (updates.status === "completed") {
+      log.info("score:updating_indexes", {
+        rid,
+        challengeId,
+        challengerId: challengeData.challengerId,
+        challengedId: challengeData.challengedId,
+        newStatus: "completed",
+      });
       await updateChallengeInUserIndex(
         challengeId,
         challengeData.challengerId,
         challengeData.challengedId,
         "completed"
       );
+      log.info("score:indexes_updated", { rid, challengeId });
     }
 
     // Remove session token
+    log.info("score:removing_session", {
+      rid,
+      challengeId,
+      sessionToken: sessionToken?.substring(0, 8) + "...",
+    });
     await remove(sessionRef);
 
     log.info("score:success", {
@@ -716,14 +842,24 @@ const submitChallengeScore = async (req, res) => {
           ? challengeData.challengedId
           : challengeData.challengerId;
 
-      emitScoreUpdated(userId, opponentId, challengeId, {
+      const scorePayload = {
         challengerScore:
           updates.challengerScore ?? challengeData.challengerScore,
         challengedScore:
           updates.challengedScore ?? challengeData.challengedScore,
         isComplete: updates.status === "completed",
         winnerId: updates.winnerId,
+      };
+
+      log.info("score:emitting_realtime", {
+        rid,
+        challengeId,
+        userId,
+        opponentId,
+        payload: scorePayload,
       });
+
+      emitScoreUpdated(userId, opponentId, challengeId, scorePayload);
 
       // Send FCM for score update if not yet completed
       if (updates.status !== "completed") {
@@ -811,8 +947,13 @@ const getChallengeHistory = async (req, res) => {
     });
 
     // Get user's challenge IDs from index
+    const idsStartTime = Date.now();
     const challengeIds = await getUserChallengeIds(userId, status);
-    log.info("history:ids", { rid, count: challengeIds.length });
+    log.info("history:ids", {
+      rid,
+      count: challengeIds.length,
+      durationMs: Date.now() - idsStartTime,
+    });
 
     // Only decrypt challenges we need
     const challengesToFetch = challengeIds.slice(
@@ -820,25 +961,140 @@ const getChallengeHistory = async (req, res) => {
       parseInt(offset) + parseInt(limit)
     );
 
+    log.info("history:fetching_challenges", {
+      rid,
+      totalIds: challengeIds.length,
+      fetchingCount: challengesToFetch.length,
+      offset: parseInt(offset),
+      limit: parseInt(limit),
+    });
+
     const userChallenges = [];
     const uniqueUserIds = new Set();
+    const fetchStartTime = Date.now();
 
-    // Fetch only the challenges we need
-    for (const challengeId of challengesToFetch) {
+    // Fetch challenges in parallel with timeouts
+    const challengePromises = challengesToFetch.map(async (challengeId) => {
+      const challengeFetchStart = Date.now();
       try {
         const challengeRef = ref(database, `challenges/${challengeId}`);
-        const challengeSnap = await get(challengeRef);
+        
+        // Add timeout to prevent hanging
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("Challenge fetch timeout")), 5000)
+        );
+        
+        const challengeSnap = await Promise.race([get(challengeRef), timeoutPromise]);
 
-        if (!challengeSnap.exists()) continue;
+        if (!challengeSnap || !challengeSnap.exists()) {
+          log.debug("history:challenge_not_found", {
+            rid,
+            challengeId,
+            durationMs: Date.now() - challengeFetchStart,
+          });
+          return null;
+        }
 
         const challengeData = challengeSnap.val();
 
-        // Collect unique user IDs for batch fetching
-        uniqueUserIds.add(challengeData.challengerId);
-        uniqueUserIds.add(challengeData.challengedId);
+        const reactionMap = {};
+        if (challengeData.reactions && typeof challengeData.reactions === "object") {
+          Object.entries(challengeData.reactions).forEach(([emoji, entries]) => {
+            if (Array.isArray(entries)) {
+              reactionMap[emoji] = entries
+                .filter((entry) => entry && typeof entry === "object")
+                .map((entry) => ({
+                  userId: entry.userId || "",
+                  userName: entry.userName || "",
+                  userAvatar: entry.userAvatar || "",
+                  timestamp: entry.timestamp || null,
+                }));
+            } else if (entries && typeof entries === "object") {
+              reactionMap[emoji] = Object.values(entries)
+                .filter((entry) => entry && typeof entry === "object")
+                .map((entry) => ({
+                  userId: entry.userId || "",
+                  userName: entry.userName || "",
+                  userAvatar: entry.userAvatar || "",
+                  timestamp: entry.timestamp || null,
+                }));
+            }
+          });
+        }
+
+        const messagesArray = [];
+        
+        // Try unified interactions first
+        if (challengeData.interactions && typeof challengeData.interactions === "object") {
+          Object.entries(challengeData.interactions).forEach(([interactionId, value]) => {
+            if (value && typeof value === "object" && value.type === "message") {
+              messagesArray.push({
+                messageId: value.interactionId || value.messageId || interactionId,
+                userId: value.userId || "",
+                userName: value.userName || "",
+                userAvatar: value.userAvatar || "",
+                message: value.message || "",
+                timestamp: value.timestamp || null,
+              });
+            }
+          });
+        }
+        
+        // Fallback to messages path for backward compatibility
+        if (challengeData.messages && typeof challengeData.messages === "object") {
+          Object.entries(challengeData.messages).forEach(([messageId, value]) => {
+            if (value && typeof value === "object") {
+              const existing = messagesArray.find(
+                (msg) => msg.messageId === (value.messageId || messageId)
+              );
+              if (!existing) {
+                messagesArray.push({
+                  messageId: value.messageId || messageId,
+                  userId: value.userId || "",
+                  userName: value.userName || "",
+                  userAvatar: value.userAvatar || "",
+                  message: value.message || "",
+                  timestamp: value.timestamp || null,
+                });
+              }
+            }
+          });
+        }
+
+        messagesArray.sort(
+          (a, b) => (a.timestamp || 0) - (b.timestamp || 0)
+        );
+
+        const trimmedMessages =
+          messagesArray.length > 50
+            ? messagesArray.slice(messagesArray.length - 50)
+            : messagesArray;
+        
+        // Also build reactions from interactions
+        if (challengeData.interactions && typeof challengeData.interactions === "object") {
+          Object.values(challengeData.interactions).forEach((interaction) => {
+            if (interaction.type === "reaction" && interaction.action === "added") {
+              const emoji = interaction.reaction;
+              if (!reactionMap[emoji]) {
+                reactionMap[emoji] = [];
+              }
+              const exists = reactionMap[emoji].some(
+                (r) => r.userId === interaction.userId && r.timestamp === interaction.timestamp
+              );
+              if (!exists) {
+                reactionMap[emoji].push({
+                  userId: interaction.userId || "",
+                  userName: interaction.userName || "",
+                  userAvatar: interaction.userAvatar || "",
+                  timestamp: interaction.timestamp || null,
+                });
+              }
+            }
+          });
+        }
 
         // Store minimal challenge data
-        userChallenges.push({
+        return {
           challengeId: challengeData.challengeId,
           challengerId: challengeData.challengerId,
           challengedId: challengeData.challengedId,
@@ -858,40 +1114,105 @@ const getChallengeHistory = async (req, res) => {
             challengeData.challengerId === userId
               ? challengeData.challengedId
               : challengeData.challengerId,
-        });
+          reactions: reactionMap,
+          messages: trimmedMessages,
+        };
       } catch (fetchError) {
-        console.warn(
-          `Failed to fetch challenge ${challengeId}:`,
-          fetchError.message
-        );
+        log.warn("history:challenge_fetch_failed", {
+          rid,
+          challengeId,
+          error: fetchError.message,
+          durationMs: Date.now() - challengeFetchStart,
+        });
+        return null;
       }
-    }
+    });
+
+    const challengeResults = await Promise.all(challengePromises);
+    // Filter out null results and collect user IDs
+    challengeResults.forEach((challenge) => {
+      if (challenge) {
+        userChallenges.push(challenge);
+        uniqueUserIds.add(challenge.challengerId);
+        uniqueUserIds.add(challenge.challengedId);
+        (challenge.messages || []).forEach((message) => {
+          if (message.userId) {
+            uniqueUserIds.add(message.userId);
+          }
+        });
+      }
+    });
+
+    log.info("history:challenges_fetched", {
+      rid,
+      fetchedCount: userChallenges.length,
+      uniqueUsers: uniqueUserIds.size,
+      durationMs: Date.now() - fetchStartTime,
+    });
 
     // Batch fetch user data
     const userDataMap = {};
+    const userFetchStartTime = Date.now();
     if (uniqueUserIds.size > 0) {
+      log.info("history:fetching_users", {
+        rid,
+        userCount: uniqueUserIds.size,
+        userIds: Array.from(uniqueUserIds),
+      });
       const userPromises = Array.from(uniqueUserIds).map(async (uid) => {
+        const userFetchStart = Date.now();
         try {
           const userRef = ref(database, `users/${uid}`);
-          const userSnap = await get(userRef);
-          if (userSnap.exists()) {
+          
+          // Add timeout to prevent hanging
+          const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error("User fetch timeout")), 5000)
+          );
+          
+          const userSnap = await Promise.race([get(userRef), timeoutPromise]);
+          
+          if (userSnap && userSnap.exists()) {
             const userData = userSnap.val();
             userDataMap[uid] = {
               displayName:
                 userData.displayName || userData.username || "Unknown Player",
               photoURL: userData.photoURL || userData.avatar || "",
             };
+            log.debug("history:user_fetched", {
+              rid,
+              userId: uid,
+              durationMs: Date.now() - userFetchStart,
+            });
+          } else {
+            log.debug("history:user_not_found", {
+              rid,
+              userId: uid,
+              durationMs: Date.now() - userFetchStart,
+            });
           }
         } catch (error) {
-          console.warn(`Failed to fetch user data for ${uid}:`, error.message);
+          log.warn("history:user_fetch_failed", {
+            rid,
+            userId: uid,
+            error: error.message,
+            durationMs: Date.now() - userFetchStart,
+          });
         }
       });
       await Promise.all(userPromises);
+      log.info("history:users_fetched", {
+        rid,
+        fetchedCount: Object.keys(userDataMap).length,
+        durationMs: Date.now() - userFetchStartTime,
+      });
+    } else {
+      log.info("history:no_users_to_fetch", { rid });
     }
 
     log.info("history:users_enriched", {
       rid,
       users: Object.keys(userDataMap).length,
+      fetchMs: Date.now() - userFetchStartTime,
     });
 
     // Enrich challenges with user data

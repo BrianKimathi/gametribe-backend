@@ -151,8 +151,10 @@ app.use(
       }
 
       // In development, allow any ngrok URL
-      if ((process.env.NODE_ENV === "development" || !process.env.NODE_ENV) && 
-          (origin.includes("ngrok-free.app") || origin.includes("ngrok.io"))) {
+      if (
+        (process.env.NODE_ENV === "development" || !process.env.NODE_ENV) &&
+        (origin.includes("ngrok-free.app") || origin.includes("ngrok.io"))
+      ) {
         console.log("✅ CORS: Ngrok origin allowed in development:", origin);
         return callback(null, true);
       }
@@ -534,7 +536,9 @@ app.get(`${routePrefix}/health/admin`, (req, res) => {
     const health = getAdminHealth && getAdminHealth();
     res.json({
       healthy: !!health?.healthy,
-      lastCheck: health?.lastCheck ? new Date(health.lastCheck).toISOString() : null,
+      lastCheck: health?.lastCheck
+        ? new Date(health.lastCheck).toISOString()
+        : null,
       lastError: health?.lastError || null,
     });
   } catch (e) {
@@ -593,11 +597,6 @@ const PORT = process.env.PORT || 5000;
 // Import challenge cleanup service
 const { startCleanupSchedule } = require("./services/challengeCleanup");
 
-// Import Socket.IO service
-const { initializeSocketIO } = require("./services/socketService");
-
-// Note: isFirebaseFunctions is already defined earlier in this file (line ~209)
-
 // Start server (for local development or non-Firebase deployments)
 const startServer = async () => {
   try {
@@ -610,10 +609,6 @@ const startServer = async () => {
 
       // Start challenge cleanup schedule
       startCleanupSchedule();
-      
-      // Initialize Socket.IO
-      initializeSocketIO(httpServer);
-      console.log("✅ Socket.IO initialized");
     });
   } catch (error) {
     console.error("❌ Failed to start server:", error);
@@ -631,7 +626,9 @@ if (process.env.VERCEL) {
   // For real-time features, use Firebase Realtime Database listeners or deploy Socket.IO on a persistent server
   module.exports = app;
   console.log("✅ Backend configured for Vercel (serverless)");
-  console.log("⚠️ Socket.IO disabled - REST API only. Real-time requires persistent server.");
+  console.log(
+    "⚠️ Socket.IO disabled - REST API only. Real-time requires persistent server."
+  );
 } else if (isFirebaseFunctions) {
   // Firebase Functions environment
   const functions = require("firebase-functions/v2");

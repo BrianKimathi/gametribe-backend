@@ -12,6 +12,14 @@ const {
 // Use V2 cancel (implemented here)
 const { cancelChallenge } = require("../controllers/challengeControllerV2");
 const {
+  addReaction,
+  getReactions,
+} = require("../controllers/challengeReactionsController");
+const {
+  sendMessage,
+  getMessages,
+} = require("../controllers/challengeMessagesController");
+const {
   validateChallengeRequest,
   validateScoreSubmission,
   validateWalletBalance,
@@ -82,5 +90,13 @@ router.get("/history", authenticateToken, getChallengeHistory);
 
 // Cancel a pending challenge (only challenger)
 router.delete("/:challengeId", authenticateToken, cancelChallenge);
+
+// Challenge reactions
+router.post("/:challengeId/reactions", authenticateToken, addReaction);
+router.get("/:challengeId/reactions", authenticateToken, getReactions);
+
+// Challenge messages (in-game chat)
+router.post("/:challengeId/messages", authenticateToken, sendMessage);
+router.get("/:challengeId/messages", authenticateToken, getMessages);
 
 module.exports = router;

@@ -799,7 +799,7 @@ const getChallengeHistory = async (req, res) => {
       } catch (fallbackError) {
         log.error("history:fallback_error", { error: fallbackError.message });
         // Continue with legacy method
-        return await getChallengeHistoryLegacy(req, res);
+      return await getChallengeHistoryLegacy(req, res);
       }
     }
 
