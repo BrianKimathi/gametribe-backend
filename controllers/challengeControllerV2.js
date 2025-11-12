@@ -201,42 +201,49 @@ const createChallenge = async (req, res) => {
       expiresAt: Date.now() + 24 * 60 * 60 * 1000, // 24 hours
     };
 
-    // Store challenge directly (unencrypted)
+    // Store challenge directly (unencrypted) - MUST complete before allowing acceptance
     const challengeRef = ref(database, `challenges/${challengeId}`);
     await set(challengeRef, challengeData);
 
-    // Add to user indexes for fast queries
-    await addChallengeToUserIndex(
+    // Emit realtime to both players IMMEDIATELY after DB write (before indexes)
+    // This ensures UI updates instantly while DB operations continue in background
+    const payload = {
+      challengeId,
+      challengerId,
+      challengedId,
+      gameId,
+      gameTitle,
+      gameImage: challengeData.gameImage,
+      gameUrl: challengeData.gameUrl,
+      betAmount: bet,
+      message: challengeData.message,
+      status: "pending",
+      createdAt: challengeData.createdAt,
+      expiresAt: challengeData.expiresAt,
+    };
+    
+    try {
+      const { emitChallengeCreated } = require("../services/socketService");
+      emitChallengeCreated(challengerId, challengedId, payload);
+    } catch (e) {
+      log.warn("realtime_emit:create:warn", { error: e.message });
+    }
+
+    // Add to user indexes in background (non-blocking)
+    addChallengeToUserIndex(
       challengeId,
       challengerId,
       challengedId,
       "pending"
-    );
+    ).catch((err) => {
+      log.warn("create:index_update:error", { error: err.message, challengeId });
+    });
 
     log.info("create:success", {
       rid,
       challengeId,
       durationMs: Date.now() - started,
     });
-
-    // Emit realtime to both players
-    try {
-      const payload = {
-        challengeId,
-        challengerId,
-        challengedId,
-        gameId,
-        gameTitle,
-        gameImage: challengeData.gameImage,
-        betAmount: bet,
-        status: "pending",
-        createdAt: challengeData.createdAt,
-      };
-      const { emitChallengeCreated } = require("../services/socketService");
-      emitChallengeCreated(challengerId, challengedId, payload);
-    } catch (e) {
-      log.warn("realtime_emit:create:warn", { error: e.message });
-    }
 
     res.json({
       success: true,
@@ -288,37 +295,29 @@ const acceptChallenge = async (req, res) => {
       return res.status(400).json({ error: "Challenge has expired" });
     }
 
-    // Update challenge status
+    // Update challenge status - MUST complete before response
+    const acceptedAt = Date.now();
     await update(challengeRef, {
       status: "accepted",
-      acceptedAt: Date.now(),
+      acceptedAt: acceptedAt,
     });
 
-    // Update user indexes
-    await updateChallengeInUserIndex(
+    // Emit accepted to both players IMMEDIATELY after DB update (before indexes)
+    // This ensures UI updates instantly while index operations continue in background
+    const payload = {
       challengeId,
-      challengeData.challengerId,
-      challengeData.challengedId,
-      "accepted"
-    );
-
-    log.info("accept:success", {
-      rid,
-      challengeId,
-      durationMs: Date.now() - started,
-    });
-
-    // Emit accepted to challenger
+      challengerId: challengeData.challengerId,
+      challengedId: challengeData.challengedId,
+      gameId: challengeData.gameId,
+      gameTitle: challengeData.gameTitle,
+      gameImage: challengeData.gameImage,
+      gameUrl: challengeData.gameUrl,
+      betAmount: challengeData.betAmount,
+      status: "accepted",
+      acceptedAt: acceptedAt,
+    };
+    
     try {
-      const payload = {
-        challengeId,
-        challengerId: challengeData.challengerId,
-        challengedId: challengeData.challengedId,
-        gameId: challengeData.gameId,
-        gameTitle: challengeData.gameTitle,
-        betAmount: challengeData.betAmount,
-        acceptedAt: Date.now(),
-      };
       const { emitChallengeAccepted } = require("../services/socketService");
       emitChallengeAccepted(
         challengeData.challengerId,
@@ -328,6 +327,22 @@ const acceptChallenge = async (req, res) => {
     } catch (e) {
       log.warn("realtime_emit:accept:warn", { error: e.message });
     }
+
+    // Update user indexes in background (non-blocking)
+    updateChallengeInUserIndex(
+      challengeId,
+      challengeData.challengerId,
+      challengeData.challengedId,
+      "accepted"
+    ).catch((err) => {
+      log.warn("accept:index_update:error", { error: err.message, challengeId });
+    });
+
+    log.info("accept:success", {
+      rid,
+      challengeId,
+      durationMs: Date.now() - started,
+    });
 
     res.json({
       success: true,

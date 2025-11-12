@@ -49,51 +49,68 @@ const sendMessage = async (req, res) => {
       return res.status(403).json({ error: "Unauthorized" });
     }
 
-    // Store in unified interactions path with type label
-    const interactionsRef = ref(database, `challenges/${challengeId}/interactions`);
-    const newInteractionRef = push(interactionsRef);
-    const interactionId = newInteractionRef.key;
+    // Generate IDs first
+    const timestamp = Date.now();
+    const interactionId = `int_${timestamp}_${Math.random().toString(36).slice(2, 9)}`;
+    const messageId = `msg_${timestamp}_${Math.random().toString(36).slice(2, 9)}`;
 
     const interactionData = {
-      interactionId: interactionId || `int_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+      interactionId: interactionId,
       type: "message",
       userId,
       userName,
       userAvatar,
       message: message.trim(),
-      timestamp: Date.now(),
+      timestamp: timestamp,
     };
 
-    await set(newInteractionRef, interactionData);
-
-    // Also maintain backward compatibility with messages path
-    const messagesRef = ref(database, `challenges/${challengeId}/messages`);
-    const newMessageRef = push(messagesRef);
-    const messageId = newMessageRef.key;
     const messageData = {
-      messageId: messageId || interactionData.interactionId,
+      messageId: messageId,
       userId,
       userName,
       userAvatar,
       message: message.trim(),
-      timestamp: Date.now(),
+      timestamp: timestamp,
     };
-    await set(newMessageRef, messageData);
 
-    // Emit socket event immediately (optimistic update)
-    emitChallengeMessage(challengeId, userId, message.trim(), {
-      ...interactionData,
-      messageId: interactionData.interactionId,
-    });
-
+    // Emit socket event FIRST (optimistic update) - UI updates immediately
     const opponentId =
       challengeData.challengerId === userId
         ? challengeData.challengedId
         : challengeData.challengerId;
+    
+    emitChallengeMessage(challengeId, userId, message.trim(), {
+      ...interactionData,
+      messageId: interactionId,
+      opponentId: opponentId,
+    });
 
+    // Store in database in background (non-blocking)
+    Promise.all([
+      // Store in unified interactions path
+      (async () => {
+        const interactionsRef = ref(database, `challenges/${challengeId}/interactions`);
+        const newInteractionRef = push(interactionsRef);
+        await set(newInteractionRef, interactionData);
+      })(),
+      // Also maintain backward compatibility with messages path
+      (async () => {
+        const messagesRef = ref(database, `challenges/${challengeId}/messages`);
+        const newMessageRef = push(messagesRef);
+        await set(newMessageRef, messageData);
+      })(),
+    ]).catch((err) => {
+      log.error("sendMessage:db_write:error", {
+        error: err.message,
+        challengeId,
+        userId,
+      });
+    });
+
+    // Create notification in background (non-blocking)
     if (opponentId && opponentId !== userId) {
       const notificationData = {
-        id: `challenge_message_${Date.now()}_${userId}`,
+        id: `challenge_message_${timestamp}_${userId}`,
         userId,
         userName,
         userAvatar,
@@ -103,7 +120,7 @@ const sendMessage = async (req, res) => {
         message: message.trim(),
         messagePreview: message.trim(),
         challengeId,
-        createdAt: Date.now(),
+        createdAt: timestamp,
         isRead: false,
       };
 
@@ -122,6 +139,7 @@ const sendMessage = async (req, res) => {
       messageId,
     });
 
+    // Return immediately - socket already emitted, DB operations continue in background
     return res.json({
       success: true,
       message: interactionData,

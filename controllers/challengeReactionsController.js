@@ -102,33 +102,51 @@ const addReaction = async (req, res) => {
         delete reactions[normalizedReaction];
       }
 
-      if (Object.keys(reactions).length === 0) {
-        await remove(reactionsRef);
-      } else {
-        await set(reactionsRef, reactions);
-      }
-
-      // Also store in unified interactions path
-      const interactionsRef = ref(database, `challenges/${challengeId}/interactions`);
-      const newInteractionRef = push(interactionsRef);
+      const timestamp = Date.now();
+      const interactionId = `int_${timestamp}_${Math.random().toString(36).slice(2, 9)}`;
       const interactionData = {
-        interactionId: newInteractionRef.key || `int_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+        interactionId: interactionId,
         type: "reaction",
         userId,
         userName,
         userAvatar,
         reaction: normalizedReaction,
         action: "removed",
-        timestamp: Date.now(),
+        timestamp: timestamp,
       };
-      await set(newInteractionRef, interactionData);
 
-      // Emit socket event for removal
+      // Emit socket event FIRST (optimistic update) - UI updates immediately
       emitChallengeReaction(challengeId, userId, normalizedReaction, {
         action: "removed",
         reactions: reactions,
         userName,
         userAvatar,
+        opponentId: opponentId,
+      });
+
+      // Store in database in background (non-blocking)
+      Promise.all([
+        // Update reactions path
+        (async () => {
+          if (Object.keys(reactions).length === 0) {
+            await remove(reactionsRef);
+          } else {
+            await set(reactionsRef, reactions);
+          }
+        })(),
+        // Store in unified interactions path
+        (async () => {
+          const interactionsRef = ref(database, `challenges/${challengeId}/interactions`);
+          const newInteractionRef = push(interactionsRef);
+          await set(newInteractionRef, interactionData);
+        })(),
+      ]).catch((err) => {
+        log.error("addReaction:db_write:error", {
+          error: err.message,
+          challengeId,
+          userId,
+          action: "removed",
+        });
       });
 
       return res.json({
@@ -138,42 +156,60 @@ const addReaction = async (req, res) => {
       });
     } else {
       // Add reaction
+      const timestamp = Date.now();
       reactions[normalizedReaction].push({
         userId,
         userName,
         userAvatar,
-        timestamp: Date.now(),
+        timestamp: timestamp,
       });
 
-      await set(reactionsRef, reactions);
-
-      // Also store in unified interactions path
-      const interactionsRef = ref(database, `challenges/${challengeId}/interactions`);
-      const newInteractionRef = push(interactionsRef);
+      const interactionId = `int_${timestamp}_${Math.random().toString(36).slice(2, 9)}`;
       const interactionData = {
-        interactionId: newInteractionRef.key || `int_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+        interactionId: interactionId,
         type: "reaction",
         userId,
         userName,
         userAvatar,
         reaction: normalizedReaction,
         action: "added",
-        timestamp: Date.now(),
+        timestamp: timestamp,
       };
-      await set(newInteractionRef, interactionData);
 
-      // Emit socket event immediately (optimistic update)
+      // Emit socket event FIRST (optimistic update) - UI updates immediately
       emitChallengeReaction(challengeId, userId, normalizedReaction, {
         action: "added",
         reactions: reactions,
         userName,
         userAvatar,
+        opponentId: opponentId,
       });
 
-      // Create notification for opponent (fire and forget)
+      // Store in database in background (non-blocking)
+      Promise.all([
+        // Update reactions path
+        (async () => {
+          await set(reactionsRef, reactions);
+        })(),
+        // Store in unified interactions path
+        (async () => {
+          const interactionsRef = ref(database, `challenges/${challengeId}/interactions`);
+          const newInteractionRef = push(interactionsRef);
+          await set(newInteractionRef, interactionData);
+        })(),
+      ]).catch((err) => {
+        log.error("addReaction:db_write:error", {
+          error: err.message,
+          challengeId,
+          userId,
+          action: "added",
+        });
+      });
+
+      // Create notification for opponent in background (non-blocking)
       if (opponentId && opponentId !== userId) {
         const notificationData = {
-          id: `challenge_reaction_${Date.now()}_${userId}`,
+          id: `challenge_reaction_${timestamp}_${userId}`,
           userId,
           userName,
           userAvatar,
@@ -182,7 +218,7 @@ const addReaction = async (req, res) => {
           title: "New challenge reaction",
           message: `${userName} reacted ${normalizedReaction} to your challenge`,
           challengeId,
-          createdAt: Date.now(),
+          createdAt: timestamp,
           isRead: false,
         };
 

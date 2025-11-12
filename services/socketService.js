@@ -110,6 +110,22 @@ const emitChallengeCompleted = (challengerId, challengedId, challengeData) => {
 };
 
 const emitChallengeReaction = (challengeId, userId, reaction, reactionData) => {
+  // Use opponentId from reactionData if available (optimized path)
+  const opponentId = reactionData.opponentId;
+  
+  if (opponentId) {
+    // Fast path: opponentId already provided
+    relayEmit("/emit/challenge-reaction", {
+      challengeId,
+      userId,
+      opponentId,
+      reaction,
+      data: { ...reactionData, type: "challenge_reaction" },
+    });
+    return;
+  }
+
+  // Fallback: fetch challenge to get opponentId (should rarely happen)
   const challengeRef = ref(database, `challenges/${challengeId}`);
   get(challengeRef)
     .then((snap) => {
@@ -124,7 +140,7 @@ const emitChallengeReaction = (challengeId, userId, reaction, reactionData) => {
       }
 
       const challenge = snap.val();
-      const opponentId =
+      const fetchedOpponentId =
         challenge.challengerId === userId
           ? challenge.challengedId
           : challenge.challengerId;
@@ -132,7 +148,7 @@ const emitChallengeReaction = (challengeId, userId, reaction, reactionData) => {
       relayEmit("/emit/challenge-reaction", {
         challengeId,
         userId,
-        opponentId,
+        opponentId: fetchedOpponentId,
         reaction,
         data: { ...reactionData, type: "challenge_reaction" },
       });
@@ -149,6 +165,22 @@ const emitChallengeReaction = (challengeId, userId, reaction, reactionData) => {
 };
 
 const emitChallengeMessage = (challengeId, userId, message, messageData) => {
+  // Use opponentId from messageData if available (optimized path)
+  const opponentId = messageData.opponentId;
+  
+  if (opponentId) {
+    // Fast path: opponentId already provided
+    relayEmit("/emit/challenge-message", {
+      challengeId,
+      userId,
+      opponentId,
+      message,
+      data: { ...messageData, type: "challenge_message" },
+    });
+    return;
+  }
+
+  // Fallback: fetch challenge to get opponentId (should rarely happen)
   const challengeRef = ref(database, `challenges/${challengeId}`);
   get(challengeRef)
     .then((snap) => {
@@ -163,7 +195,7 @@ const emitChallengeMessage = (challengeId, userId, message, messageData) => {
       }
 
       const challenge = snap.val();
-      const opponentId =
+      const fetchedOpponentId =
         challenge.challengerId === userId
           ? challenge.challengedId
           : challenge.challengerId;
@@ -171,7 +203,7 @@ const emitChallengeMessage = (challengeId, userId, message, messageData) => {
       relayEmit("/emit/challenge-message", {
         challengeId,
         userId,
-        opponentId,
+        opponentId: fetchedOpponentId,
         message,
         data: { ...messageData, type: "challenge_message" },
       });
