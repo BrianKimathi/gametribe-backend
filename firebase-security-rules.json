@@ -59,7 +59,10 @@
     "challenges": {
       "$challengeId": {
         ".read": "auth != null && (data.child('challengerId').val() == auth.uid || data.child('challengedId').val() == auth.uid)",
-        ".write": "false"
+        ".write": "false",
+        "interactions": {
+          ".indexOn": "timestamp"
+        }
       }
     },
 

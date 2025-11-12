@@ -133,10 +133,15 @@ const sendMessage = async (req, res) => {
       });
     }
 
-    log.info("Message sent", {
+    log.info("sendMessage:success", {
       challengeId,
       userId,
-      messageId,
+      userName,
+      messageId: interactionId,
+      messagePreview: message.trim().substring(0, 50),
+      messageLength: message.trim().length,
+      opponentId,
+      timestamp,
     });
 
     // Return immediately - socket already emitted, DB operations continue in background
@@ -162,6 +167,11 @@ const getMessages = async (req, res) => {
     const { challengeId } = req.params;
     const limit = parseInt(req.query.limit) || 50;
 
+    log.info("getMessages:start", {
+      challengeId,
+      limit,
+    });
+
     // Try unified interactions first
     const interactionsRef = ref(database, `challenges/${challengeId}/interactions`);
     const interactionsQuery = query(
@@ -173,7 +183,8 @@ const getMessages = async (req, res) => {
 
     if (interactionsSnap.exists()) {
       const interactions = interactionsSnap.val();
-      const messagesArray = Object.keys(interactions)
+      const allInteractions = Object.keys(interactions);
+      const messagesArray = allInteractions
         .map((key) => ({
           interactionId: key,
           ...interactions[key],
@@ -181,6 +192,15 @@ const getMessages = async (req, res) => {
         .filter((item) => item.type === "message")
         .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0))
         .slice(-limit);
+
+      log.info("getMessages:from_interactions", {
+        challengeId,
+        totalInteractions: allInteractions.length,
+        messagesFound: messagesArray.length,
+        returnedMessages: messagesArray.length,
+        firstMessageTime: messagesArray.length > 0 ? messagesArray[0].timestamp : null,
+        lastMessageTime: messagesArray.length > 0 ? messagesArray[messagesArray.length - 1].timestamp : null,
+      });
 
       return res.json({
         success: true,
@@ -198,6 +218,10 @@ const getMessages = async (req, res) => {
     const messagesSnap = await get(messagesQuery);
 
     if (!messagesSnap.exists()) {
+      log.info("getMessages:no_messages", {
+        challengeId,
+        source: "fallback_messages_path",
+      });
       return res.json({ success: true, messages: [] });
     }
 
@@ -210,12 +234,22 @@ const getMessages = async (req, res) => {
       }))
       .sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
 
+    log.info("getMessages:from_messages_path", {
+      challengeId,
+      messagesFound: messagesArray.length,
+      source: "fallback_messages_path",
+    });
+
     return res.json({
       success: true,
       messages: messagesArray,
     });
   } catch (error) {
-    log.error("getMessages:error", { error: error.message });
+    log.error("getMessages:error", { 
+      challengeId: req.params.challengeId,
+      error: error.message,
+      stack: error.stack,
+    });
     res.status(500).json({
       error: "Failed to get messages",
       message: error.message,

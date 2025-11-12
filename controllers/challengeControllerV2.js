@@ -1012,45 +1012,117 @@ const getChallengeHistory = async (req, res) => {
 
         const challengeData = challengeSnap.val();
 
+        // Fetch interactions separately (they may not be in the main snapshot)
+        let interactionsData = null;
+        try {
+          const interactionsRef = ref(database, `challenges/${challengeId}/interactions`);
+          const interactionsSnap = await get(interactionsRef);
+          if (interactionsSnap.exists()) {
+            interactionsData = interactionsSnap.val();
+          }
+        } catch (interactionsError) {
+          log.debug("history:interactions_fetch_failed", {
+            rid,
+            challengeId,
+            error: interactionsError.message,
+          });
+        }
+
+        // Debug logging to see what data is available
+        const interactionsCount = interactionsData && typeof interactionsData === "object" 
+          ? Object.keys(interactionsData).length 
+          : 0;
+        
+        // Only log detailed data for challenges with interactions (to reduce log volume)
+        if (interactionsCount > 0 || (challengeData.messages && Object.keys(challengeData.messages).length > 0) || 
+            (challengeData.reactions && Object.keys(challengeData.reactions).length > 0)) {
+          log.info("history:challenge_data_fetched", {
+            rid,
+            challengeId,
+            status: challengeData.status,
+            hasInteractions: !!interactionsData,
+            interactionsCount: interactionsCount,
+            hasMessages: !!challengeData.messages,
+            messagesCount: challengeData.messages && typeof challengeData.messages === "object"
+              ? Object.keys(challengeData.messages).length
+              : 0,
+            hasReactions: !!challengeData.reactions,
+            reactionsCount: challengeData.reactions && typeof challengeData.reactions === "object"
+              ? Object.keys(challengeData.reactions).length
+              : 0,
+          });
+        }
+
         const reactionMap = {};
+        
+        // Build reactions from interactions first
+        if (interactionsData && typeof interactionsData === "object") {
+          Object.values(interactionsData).forEach((interaction) => {
+            if (interaction && typeof interaction === "object" && 
+                interaction.type === "reaction" && interaction.action === "added") {
+              const emoji = interaction.reaction;
+              if (!reactionMap[emoji]) {
+                reactionMap[emoji] = [];
+              }
+              const exists = reactionMap[emoji].some(
+                (r) => r.userId === interaction.userId && r.timestamp === interaction.timestamp
+              );
+              if (!exists) {
+                reactionMap[emoji].push({
+                  userId: interaction.userId || "",
+                  userName: interaction.userName || "",
+                  userAvatar: interaction.userAvatar || "",
+                  timestamp: interaction.timestamp || null,
+                });
+              }
+            }
+          });
+        }
+        
+        // Also include reactions from the old reactions path for backward compatibility
         if (challengeData.reactions && typeof challengeData.reactions === "object") {
           Object.entries(challengeData.reactions).forEach(([emoji, entries]) => {
-            if (Array.isArray(entries)) {
-              reactionMap[emoji] = entries
-                .filter((entry) => entry && typeof entry === "object")
-                .map((entry) => ({
-                  userId: entry.userId || "",
-                  userName: entry.userName || "",
-                  userAvatar: entry.userAvatar || "",
-                  timestamp: entry.timestamp || null,
-                }));
-            } else if (entries && typeof entries === "object") {
-              reactionMap[emoji] = Object.values(entries)
-                .filter((entry) => entry && typeof entry === "object")
-                .map((entry) => ({
-                  userId: entry.userId || "",
-                  userName: entry.userName || "",
-                  userAvatar: entry.userAvatar || "",
-                  timestamp: entry.timestamp || null,
-                }));
+            if (!reactionMap[emoji]) {
+              reactionMap[emoji] = [];
             }
+            const entryList = Array.isArray(entries) ? entries : Object.values(entries);
+            entryList.forEach((entry) => {
+              if (entry && typeof entry === "object") {
+                const exists = reactionMap[emoji].some(
+                  (r) => r.userId === entry.userId && r.timestamp === entry.timestamp
+                );
+                if (!exists) {
+                  reactionMap[emoji].push({
+                    userId: entry.userId || "",
+                    userName: entry.userName || "",
+                    userAvatar: entry.userAvatar || "",
+                    timestamp: entry.timestamp || null,
+                  });
+                }
+              }
+            });
           });
         }
 
         const messagesArray = [];
         
-        // Try unified interactions first
-        if (challengeData.interactions && typeof challengeData.interactions === "object") {
-          Object.entries(challengeData.interactions).forEach(([interactionId, value]) => {
+        // Build messages from interactions first
+        if (interactionsData && typeof interactionsData === "object") {
+          Object.entries(interactionsData).forEach(([interactionId, value]) => {
             if (value && typeof value === "object" && value.type === "message") {
-              messagesArray.push({
-                messageId: value.interactionId || value.messageId || interactionId,
-                userId: value.userId || "",
-                userName: value.userName || "",
-                userAvatar: value.userAvatar || "",
-                message: value.message || "",
-                timestamp: value.timestamp || null,
-              });
+              const existing = messagesArray.find(
+                (msg) => msg.messageId === (value.interactionId || value.messageId || interactionId)
+              );
+              if (!existing) {
+                messagesArray.push({
+                  messageId: value.interactionId || value.messageId || interactionId,
+                  userId: value.userId || "",
+                  userName: value.userName || "",
+                  userAvatar: value.userAvatar || "",
+                  message: value.message || "",
+                  timestamp: value.timestamp || null,
+                });
+              }
             }
           });
         }
@@ -1084,27 +1156,24 @@ const getChallengeHistory = async (req, res) => {
           messagesArray.length > 50
             ? messagesArray.slice(messagesArray.length - 50)
             : messagesArray;
+
+        // Log summary of messages and reactions found
+        const reactionEmojiCount = Object.keys(reactionMap).length;
+        const totalReactions = Object.values(reactionMap).reduce(
+          (sum, entries) => sum + (Array.isArray(entries) ? entries.length : 0),
+          0
+        );
         
-        // Also build reactions from interactions
-        if (challengeData.interactions && typeof challengeData.interactions === "object") {
-          Object.values(challengeData.interactions).forEach((interaction) => {
-            if (interaction.type === "reaction" && interaction.action === "added") {
-              const emoji = interaction.reaction;
-              if (!reactionMap[emoji]) {
-                reactionMap[emoji] = [];
-              }
-              const exists = reactionMap[emoji].some(
-                (r) => r.userId === interaction.userId && r.timestamp === interaction.timestamp
-              );
-              if (!exists) {
-                reactionMap[emoji].push({
-                  userId: interaction.userId || "",
-                  userName: interaction.userName || "",
-                  userAvatar: interaction.userAvatar || "",
-                  timestamp: interaction.timestamp || null,
-                });
-              }
-            }
+        // Only log summary for challenges with actual interactions (to reduce log volume)
+        if (trimmedMessages.length > 0 || totalReactions > 0) {
+          log.info("history:challenge_interactions_summary", {
+            rid,
+            challengeId,
+            messagesCount: trimmedMessages.length,
+            totalMessagesFound: messagesArray.length,
+            reactionEmojiTypes: reactionEmojiCount,
+            totalReactions: totalReactions,
+            reactionEmojis: Object.keys(reactionMap),
           });
         }
 
@@ -1158,10 +1227,39 @@ const getChallengeHistory = async (req, res) => {
       }
     });
 
+    // Calculate overall statistics
+    let totalMessages = 0;
+    let totalReactions = 0;
+    let challengesWithMessages = 0;
+    let challengesWithReactions = 0;
+    
+    userChallenges.forEach((challenge) => {
+      const msgCount = challenge.messages?.length || 0;
+      const reactCount = challenge.reactions 
+        ? Object.values(challenge.reactions).reduce(
+            (sum, entries) => sum + (Array.isArray(entries) ? entries.length : 0),
+            0
+          )
+        : 0;
+      
+      if (msgCount > 0) {
+        challengesWithMessages++;
+        totalMessages += msgCount;
+      }
+      if (reactCount > 0) {
+        challengesWithReactions++;
+        totalReactions += reactCount;
+      }
+    });
+
     log.info("history:challenges_fetched", {
       rid,
       fetchedCount: userChallenges.length,
       uniqueUsers: uniqueUserIds.size,
+      challengesWithMessages,
+      totalMessages,
+      challengesWithReactions,
+      totalReactions,
       durationMs: Date.now() - fetchStartTime,
     });
 

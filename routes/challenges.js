@@ -7,8 +7,9 @@ const {
   rejectChallenge,
   startGameSession,
   submitChallengeScore,
-  getChallengeHistory,
 } = require("../controllers/challengeController");
+// Use V2 getChallengeHistory (with enhanced logging)
+const { getChallengeHistory } = require("../controllers/challengeControllerV2");
 // Use V2 cancel (implemented here)
 const { cancelChallenge } = require("../controllers/challengeControllerV2");
 const {

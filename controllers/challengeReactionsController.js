@@ -149,6 +149,17 @@ const addReaction = async (req, res) => {
         });
       });
 
+      log.info("addReaction:removed", {
+        challengeId,
+        userId,
+        userName,
+        reaction: normalizedReaction,
+        interactionId,
+        opponentId,
+        remainingReactionsCount: Object.keys(reactions).length,
+        timestamp,
+      });
+
       return res.json({
         success: true,
         action: "removed",
@@ -231,6 +242,19 @@ const addReaction = async (req, res) => {
         });
       }
 
+      const reactionCount = reactions[normalizedReaction]?.length || 0;
+      log.info("addReaction:added", {
+        challengeId,
+        userId,
+        userName,
+        reaction: normalizedReaction,
+        interactionId,
+        opponentId,
+        reactionCount: reactionCount,
+        totalEmojiTypes: Object.keys(reactions).length,
+        timestamp,
+      });
+
       return res.json({
         success: true,
         action: "added",
@@ -238,7 +262,12 @@ const addReaction = async (req, res) => {
       });
     }
   } catch (error) {
-    log.error("addReaction:error", { error: error.message });
+    log.error("addReaction:error", { 
+      challengeId: req.params.challengeId,
+      userId: req.user?.uid,
+      error: error.message,
+      stack: error.stack,
+    });
     res.status(500).json({
       error: "Failed to add reaction",
       message: error.message,
@@ -253,6 +282,10 @@ const getReactions = async (req, res) => {
   try {
     const { challengeId } = req.params;
 
+    log.info("getReactions:start", {
+      challengeId,
+    });
+
     // Try unified interactions first, then fallback to reactions path
     const interactionsRef = ref(database, `challenges/${challengeId}/interactions`);
     const interactionsSnap = await get(interactionsRef);
@@ -260,6 +293,7 @@ const getReactions = async (req, res) => {
     if (interactionsSnap.exists()) {
       const interactions = interactionsSnap.val();
       const reactionsMap = {};
+      const totalInteractions = Object.keys(interactions).length;
       
       // Build reactions map from interactions
       Object.values(interactions).forEach((interaction) => {
@@ -276,6 +310,12 @@ const getReactions = async (req, res) => {
           });
         }
       });
+
+      const reactionsFromInteractions = Object.keys(reactionsMap).length;
+      const totalReactionsFromInteractions = Object.values(reactionsMap).reduce(
+        (sum, entries) => sum + (Array.isArray(entries) ? entries.length : 0),
+        0
+      );
 
       // Also merge with existing reactions path for backward compatibility
       const reactionsRef = ref(database, `challenges/${challengeId}/reactions`);
@@ -305,6 +345,23 @@ const getReactions = async (req, res) => {
         });
       }
 
+      const finalEmojiTypes = Object.keys(reactionsMap).length;
+      const finalTotalReactions = Object.values(reactionsMap).reduce(
+        (sum, entries) => sum + (Array.isArray(entries) ? entries.length : 0),
+        0
+      );
+
+      log.info("getReactions:from_interactions", {
+        challengeId,
+        totalInteractions,
+        reactionsFromInteractions,
+        totalReactionsFromInteractions,
+        finalEmojiTypes,
+        finalTotalReactions,
+        emojis: Object.keys(reactionsMap),
+        source: "interactions_path",
+      });
+
       return res.json({
         success: true,
         reactions: reactionsMap,
@@ -316,15 +373,42 @@ const getReactions = async (req, res) => {
     const reactionsSnap = await get(reactionsRef);
 
     if (!reactionsSnap.exists()) {
+      log.info("getReactions:no_reactions", {
+        challengeId,
+        source: "fallback_reactions_path",
+      });
       return res.json({ success: true, reactions: {} });
     }
 
+    const reactions = reactionsSnap.val();
+    const emojiTypes = Object.keys(reactions).length;
+    const totalReactions = Object.values(reactions).reduce(
+      (sum, entries) => {
+        if (Array.isArray(entries)) return sum + entries.length;
+        if (entries && typeof entries === "object") return sum + Object.keys(entries).length;
+        return sum;
+      },
+      0
+    );
+
+    log.info("getReactions:from_reactions_path", {
+      challengeId,
+      emojiTypes,
+      totalReactions,
+      emojis: Object.keys(reactions),
+      source: "fallback_reactions_path",
+    });
+
     return res.json({
       success: true,
-      reactions: reactionsSnap.val(),
+      reactions: reactions,
     });
   } catch (error) {
-    log.error("getReactions:error", { error: error.message });
+    log.error("getReactions:error", { 
+      challengeId: req.params.challengeId,
+      error: error.message,
+      stack: error.stack,
+    });
     res.status(500).json({
       error: "Failed to get reactions",
       message: error.message,
