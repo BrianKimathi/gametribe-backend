@@ -123,6 +123,35 @@
       "$eventId": {
         ".write": "auth != null"
       }
+    },
+
+    "directMessages": {
+      ".read": "auth != null",
+      ".write": "auth != null",
+      ".indexOn": ["createdAt", "lastMessageAt"],
+      "$chatId": {
+        ".read": "auth != null",
+        ".write": "auth != null",
+        "participants": {
+          ".validate": "auth != null && (newData.hasChildren(['uid', 'name']) || newData.hasChildren(['uid', 'name', 'avatar']))"
+        },
+        "messages": {
+          ".indexOn": ["createdAt", "senderId", "timestamp", "sentAt"],
+          "$messageId": {
+            ".read": "auth != null",
+            ".write": "auth != null",
+            ".validate": "auth != null && (newData.child('senderId').val() == auth.uid || newData.child('receiverId').val() == auth.uid)"
+          }
+        }
+      }
+    },
+
+    "userChats": {
+      ".indexOn": ["lastMessageAt", "createdAt"],
+      "$uid": {
+        ".read": "auth != null && auth.uid == $uid",
+        ".write": "auth != null && auth.uid == $uid"
+      }
     }
   }
 }
