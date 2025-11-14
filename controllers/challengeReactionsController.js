@@ -24,8 +24,8 @@ const addReaction = async (req, res) => {
 
     const normalizedReaction = reaction.trim();
 
-    // Get challenge data
-    const challengeRef = ref(database, `challenges/${challengeId}`);
+    // Get challenge data (betting challenges are in bettingChallenges path)
+    const challengeRef = ref(database, `bettingChallenges/${challengeId}`);
     const challengeSnap = await get(challengeRef);
 
     if (!challengeSnap.exists()) {
@@ -52,7 +52,7 @@ const addReaction = async (req, res) => {
     // Initialize reactions object if it doesn't exist
     const reactionsRef = ref(
       database,
-      `challenges/${challengeId}/reactions`
+      `bettingChallenges/${challengeId}/reactions`
     );
     const reactionsSnap = await get(reactionsRef);
     const rawReactions = reactionsSnap.exists() ? reactionsSnap.val() : {};
@@ -136,7 +136,7 @@ const addReaction = async (req, res) => {
         })(),
         // Store in unified interactions path
         (async () => {
-          const interactionsRef = ref(database, `challenges/${challengeId}/interactions`);
+          const interactionsRef = ref(database, `bettingChallenges/${challengeId}/interactions`);
           const newInteractionRef = push(interactionsRef);
           await set(newInteractionRef, interactionData);
         })(),
@@ -204,7 +204,7 @@ const addReaction = async (req, res) => {
         })(),
         // Store in unified interactions path
         (async () => {
-          const interactionsRef = ref(database, `challenges/${challengeId}/interactions`);
+          const interactionsRef = ref(database, `bettingChallenges/${challengeId}/interactions`);
           const newInteractionRef = push(interactionsRef);
           await set(newInteractionRef, interactionData);
         })(),
@@ -287,7 +287,7 @@ const getReactions = async (req, res) => {
     });
 
     // Try unified interactions first, then fallback to reactions path
-    const interactionsRef = ref(database, `challenges/${challengeId}/interactions`);
+    const interactionsRef = ref(database, `bettingChallenges/${challengeId}/interactions`);
     const interactionsSnap = await get(interactionsRef);
 
     if (interactionsSnap.exists()) {
@@ -318,7 +318,7 @@ const getReactions = async (req, res) => {
       );
 
       // Also merge with existing reactions path for backward compatibility
-      const reactionsRef = ref(database, `challenges/${challengeId}/reactions`);
+      const reactionsRef = ref(database, `bettingChallenges/${challengeId}/reactions`);
       const reactionsSnap = await get(reactionsRef);
       if (reactionsSnap.exists()) {
         const existingReactions = reactionsSnap.val();
@@ -369,7 +369,7 @@ const getReactions = async (req, res) => {
     }
 
     // Fallback to old reactions path
-    const reactionsRef = ref(database, `challenges/${challengeId}/reactions`);
+    const reactionsRef = ref(database, `bettingChallenges/${challengeId}/reactions`);
     const reactionsSnap = await get(reactionsRef);
 
     if (!reactionsSnap.exists()) {

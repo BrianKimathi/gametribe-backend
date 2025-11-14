@@ -24,8 +24,8 @@ const sendMessage = async (req, res) => {
       return res.status(400).json({ error: "Missing challengeId" });
     }
 
-    // Get challenge data
-    const challengeRef = ref(database, `challenges/${challengeId}`);
+    // Get challenge data (betting challenges are in bettingChallenges path)
+    const challengeRef = ref(database, `bettingChallenges/${challengeId}`);
     const challengeSnap = await get(challengeRef);
 
     if (!challengeSnap.exists()) {
@@ -89,13 +89,13 @@ const sendMessage = async (req, res) => {
     Promise.all([
       // Store in unified interactions path
       (async () => {
-        const interactionsRef = ref(database, `challenges/${challengeId}/interactions`);
+        const interactionsRef = ref(database, `bettingChallenges/${challengeId}/interactions`);
         const newInteractionRef = push(interactionsRef);
         await set(newInteractionRef, interactionData);
       })(),
       // Also maintain backward compatibility with messages path
       (async () => {
-        const messagesRef = ref(database, `challenges/${challengeId}/messages`);
+        const messagesRef = ref(database, `bettingChallenges/${challengeId}/messages`);
         const newMessageRef = push(messagesRef);
         await set(newMessageRef, messageData);
       })(),
@@ -173,7 +173,7 @@ const getMessages = async (req, res) => {
     });
 
     // Try unified interactions first
-    const interactionsRef = ref(database, `challenges/${challengeId}/interactions`);
+    const interactionsRef = ref(database, `bettingChallenges/${challengeId}/interactions`);
     const interactionsQuery = query(
       interactionsRef,
       orderByChild("timestamp"),
@@ -209,7 +209,7 @@ const getMessages = async (req, res) => {
     }
 
     // Fallback to old messages path for backward compatibility
-    const messagesRef = ref(database, `challenges/${challengeId}/messages`);
+    const messagesRef = ref(database, `bettingChallenges/${challengeId}/messages`);
     const messagesQuery = query(
       messagesRef,
       orderByChild("timestamp"),

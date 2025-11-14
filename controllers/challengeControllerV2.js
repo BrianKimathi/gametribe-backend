@@ -183,7 +183,6 @@ const createChallenge = async (req, res) => {
     }
 
     // Check wallet balance and move to escrow
-    const { addWalletTransaction } = require("../controllers/walletController");
     const userRef = ref(database, `users/${challengerId}`);
     const userSnap = await get(userRef);
     const user = userSnap.val();
@@ -196,11 +195,34 @@ const createChallenge = async (req, res) => {
     const currentBalance = wallet.amount || 0;
     const currentEscrow = wallet.escrowBalance || 0;
 
+    log.info("create:wallet_check", {
+      rid,
+      challengerId,
+      currentBalance,
+      currentEscrow,
+      totalBalance: currentBalance + currentEscrow,
+      betAmount: bet,
+      walletObject: wallet,
+    });
+
     if (currentBalance < bet) {
+      log.warn("create:insufficient_balance", {
+        rid,
+        challengerId,
+        currentBalance,
+        currentEscrow,
+        totalBalance: currentBalance + currentEscrow,
+        betAmount: bet,
+        availableBalance: currentBalance,
+        requiredBalance: bet,
+      });
       return res.status(400).json({
         error: "Insufficient wallet balance",
         balance: currentBalance,
+        escrowBalance: currentEscrow,
+        totalBalance: currentBalance + currentEscrow,
         required: bet,
+        message: `Available balance: ${currentBalance} KES, Required: ${bet} KES. ${currentEscrow > 0 ? `${currentEscrow} KES is currently in escrow.` : ''}`,
       });
     }
 
@@ -217,14 +239,22 @@ const createChallenge = async (req, res) => {
       "wallet/updatedAt": new Date().toISOString(),
     });
 
-    // Add transaction record
-    await addWalletTransaction(
-      challengerId,
-      -bet,
-      "escrow",
-      `Challenge escrow: ${challengeId}`,
-      { challengeId, type: "challenge_created" }
-    );
+    // Create transaction record directly (don't call addWalletTransaction as it would read stale balance)
+    const transactionId = push(ref(database, `users/${challengerId}/wallet/transactions`)).key;
+    const transaction = {
+      id: transactionId,
+      amount: -bet,
+      type: "escrow",
+      description: `Challenge escrow: ${challengeId}`,
+      balanceBefore: currentBalance,
+      balanceAfter: newBalance,
+      metadata: { challengeId, type: "challenge_created" },
+      createdAt: new Date().toISOString(),
+    };
+
+    await update(ref(database, `users/${challengerId}`), {
+      [`wallet/transactions/${transactionId}`]: transaction,
+    });
 
     // Create challenge data (NO ENCRYPTION)
     const challengeData = {
