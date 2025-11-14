@@ -1174,22 +1174,34 @@ const mpesaWebhook = async (req, res) => {
           return res.status(400).json({ error: "Invalid pointsToAdd" });
         }
 
+        // Preserve existing wallet fields (escrowBalance, etc.)
+        const currentWalletAmount = currentWallet.amount || 0;
+        const currentEscrowBalance = currentWallet.escrowBalance || 0;
+        const newWalletAmount = currentWalletAmount + pointsToAdd;
+
         console.log("🔄 Updating user points and wallet:", {
           userId: transaction.userId,
           currentPoints,
-          currentWalletAmount: currentWallet.amount || 0,
+          currentWalletAmount,
+          currentEscrowBalance,
           pointsToAdd,
           newPoints: currentPoints + pointsToAdd,
-          newWalletAmount: (currentWallet.amount || 0) + pointsToAdd,
+          newWalletAmount,
         });
 
+        // Update wallet using path-based update to preserve all existing fields
+        const walletUpdatePath = ref(database, `users/${transaction.userId}/wallet`);
+        await updateWithRetry(walletUpdatePath, {
+          amount: newWalletAmount,
+          // Preserve escrowBalance if it exists, otherwise set to 0
+          escrowBalance: currentEscrowBalance,
+          currency: currentWallet.currency || "KES",
+          lastUpdated: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
+        
+        // Update user's updatedAt timestamp
         await updateWithRetry(userRef, {
-          // Points are NOT updated - only earned through social actions
-          wallet: {
-            amount: (currentWallet.amount || 0) + pointsToAdd,
-            currency: "KES",
-            lastUpdated: new Date().toISOString(),
-          },
           updatedAt: new Date().toISOString(),
         });
 
@@ -1216,8 +1228,9 @@ const mpesaWebhook = async (req, res) => {
               currency: transaction.currency,
             },
             timestamp: new Date().toISOString(),
-            previousBalance: currentWallet.amount || 0,
-            newBalance: (currentWallet.amount || 0) + pointsToAdd,
+            createdAt: new Date().toISOString(),
+            previousBalance: currentWalletAmount,
+            newBalance: newWalletAmount,
           }
         );
       } else {
