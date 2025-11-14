@@ -360,31 +360,74 @@ const acceptChallenge = async (req, res) => {
       });
     }
 
-    // Deduct from wallet and add to escrow for challenged user
-    const newChallengedBalance = challengedBalance - betAmount;
-    const newChallengedEscrow = challengedEscrow + betAmount;
+    // Store original values for rollback in case of error
+    const originalBalance = challengedBalance;
+    const originalEscrow = challengedEscrow;
+    let acceptedAt;
 
-    await update(challengedUserRef, {
-      "wallet/amount": newChallengedBalance,
-      "wallet/escrowBalance": newChallengedEscrow,
-      "wallet/updatedAt": new Date().toISOString(),
-    });
+    try {
+      // Deduct from wallet and add to escrow for challenged user
+      const newChallengedBalance = challengedBalance - betAmount;
+      const newChallengedEscrow = challengedEscrow + betAmount;
 
-    // Add transaction record for challenged user
-    await addWalletTransaction(
-      challengedId,
-      -betAmount,
-      "escrow",
-      `Challenge escrow: ${challengeId}`,
-      { challengeId, type: "challenge_accepted" }
-    );
+      await update(challengedUserRef, {
+        "wallet/amount": newChallengedBalance,
+        "wallet/escrowBalance": newChallengedEscrow,
+        "wallet/updatedAt": new Date().toISOString(),
+      });
 
-    // Update challenge status - MUST complete before response
-    const acceptedAt = Date.now();
-    await update(challengeRef, {
-      status: "accepted",
-      acceptedAt: acceptedAt,
-    });
+      // Add transaction record for challenged user (without updating balance again)
+      // Create transaction record directly without calling addWalletTransaction
+      // since we've already updated the wallet balance above
+      const transactionId = push(ref(database, `users/${challengedId}/wallet/transactions`)).key;
+      const transaction = {
+        id: transactionId,
+        amount: -betAmount,
+        type: "escrow",
+        description: `Challenge escrow: ${challengeId}`,
+        balanceBefore: originalBalance,
+        balanceAfter: newChallengedBalance,
+        metadata: { challengeId, type: "challenge_accepted" },
+        createdAt: new Date().toISOString(),
+      };
+
+      await update(ref(database, `users/${challengedId}`), {
+        [`wallet/transactions/${transactionId}`]: transaction,
+      });
+
+      // Update challenge status - MUST complete before response
+      acceptedAt = Date.now();
+      await update(challengeRef, {
+        status: "accepted",
+        acceptedAt: acceptedAt,
+      });
+    } catch (error) {
+      // Rollback wallet changes if challenge status update fails
+      log.error("accept:rollback", { 
+        rid, 
+        challengeId, 
+        error: error.message,
+        originalBalance,
+        originalEscrow 
+      });
+      
+      try {
+        await update(challengedUserRef, {
+          "wallet/amount": originalBalance,
+          "wallet/escrowBalance": originalEscrow,
+          "wallet/updatedAt": new Date().toISOString(),
+        });
+        log.info("accept:rollback:success", { rid, challengeId });
+      } catch (rollbackError) {
+        log.error("accept:rollback:failed", { 
+          rid, 
+          challengeId, 
+          error: rollbackError.message 
+        });
+      }
+      
+      throw error; // Re-throw to be caught by outer catch
+    }
 
     // Emit accepted to both players IMMEDIATELY after DB update (before indexes)
     // This ensures UI updates instantly while index operations continue in background
