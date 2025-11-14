@@ -1,17 +1,15 @@
 const express = require("express");
 const router = express.Router();
 const { authenticateToken } = require("../middleware/authMiddleware");
-const {
-  startGameSession,
-  submitChallengeScore,
-} = require("../controllers/challengeController");
-// Use V2 for create, accept, reject, cancel, and history (with escrow logic)
+// Use V2 for all challenge operations (with escrow logic and bettingChallenges path)
 const {
   createChallenge,
   acceptChallenge,
   rejectChallenge,
   cancelChallenge,
   getChallengeHistory,
+  startGameSession,
+  submitChallengeScore,
 } = require("../controllers/challengeControllerV2");
 const {
   addReaction,
