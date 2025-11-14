@@ -2,16 +2,17 @@ const express = require("express");
 const router = express.Router();
 const { authenticateToken } = require("../middleware/authMiddleware");
 const {
-  createChallenge,
-  acceptChallenge,
-  rejectChallenge,
   startGameSession,
   submitChallengeScore,
 } = require("../controllers/challengeController");
-// Use V2 getChallengeHistory (with enhanced logging)
-const { getChallengeHistory } = require("../controllers/challengeControllerV2");
-// Use V2 cancel (implemented here)
-const { cancelChallenge } = require("../controllers/challengeControllerV2");
+// Use V2 for create, accept, reject, cancel, and history (with escrow logic)
+const {
+  createChallenge,
+  acceptChallenge,
+  rejectChallenge,
+  cancelChallenge,
+  getChallengeHistory,
+} = require("../controllers/challengeControllerV2");
 const {
   addReaction,
   getReactions,

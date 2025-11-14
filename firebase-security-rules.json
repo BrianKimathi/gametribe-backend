@@ -56,7 +56,13 @@
       }
     },
 
-    "challenges": {
+    "chatChallenges": {
+      "$challengeId": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      }
+    },
+    "bettingChallenges": {
       "$challengeId": {
         ".read": "auth != null && (data.child('challengerId').val() == auth.uid || data.child('challengedId').val() == auth.uid)",
         ".write": "false",

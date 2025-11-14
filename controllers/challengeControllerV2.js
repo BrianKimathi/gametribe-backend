@@ -107,7 +107,7 @@ const createChallenge = async (req, res) => {
       for (const existingChallengeId of existingChallengeIds) {
         const existingChallengeRef = ref(
           database,
-          `challenges/${existingChallengeId}`
+          `bettingChallenges/${existingChallengeId}`
         );
         const existingChallengeSnap = await get(existingChallengeRef);
 
@@ -144,7 +144,7 @@ const createChallenge = async (req, res) => {
       for (const existingChallengeId of acceptedChallengeIds) {
         const existingChallengeRef = ref(
           database,
-          `challenges/${existingChallengeId}`
+          `bettingChallenges/${existingChallengeId}`
         );
         const existingChallengeSnap = await get(existingChallengeRef);
 
@@ -182,8 +182,49 @@ const createChallenge = async (req, res) => {
       // Continue with challenge creation even if duplicate check fails
     }
 
-    // Generate challenge ID
+    // Check wallet balance and move to escrow
+    const { addWalletTransaction } = require("../controllers/walletController");
+    const userRef = ref(database, `users/${challengerId}`);
+    const userSnap = await get(userRef);
+    const user = userSnap.val();
+
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const wallet = user.wallet || { amount: 0, escrowBalance: 0 };
+    const currentBalance = wallet.amount || 0;
+    const currentEscrow = wallet.escrowBalance || 0;
+
+    if (currentBalance < bet) {
+      return res.status(400).json({
+        error: "Insufficient wallet balance",
+        balance: currentBalance,
+        required: bet,
+      });
+    }
+
+    // Generate challenge ID first (needed for transaction record)
     const challengeId = generateChallengeId();
+
+    // Deduct from wallet and add to escrow
+    const newBalance = currentBalance - bet;
+    const newEscrow = currentEscrow + bet;
+
+    await update(userRef, {
+      "wallet/amount": newBalance,
+      "wallet/escrowBalance": newEscrow,
+      "wallet/updatedAt": new Date().toISOString(),
+    });
+
+    // Add transaction record
+    await addWalletTransaction(
+      challengerId,
+      -bet,
+      "escrow",
+      `Challenge escrow: ${challengeId}`,
+      { challengeId, type: "challenge_created" }
+    );
 
     // Create challenge data (NO ENCRYPTION)
     const challengeData = {
@@ -201,8 +242,9 @@ const createChallenge = async (req, res) => {
       expiresAt: Date.now() + 24 * 60 * 60 * 1000, // 24 hours
     };
 
-    // Store challenge directly (unencrypted) - MUST complete before allowing acceptance
-    const challengeRef = ref(database, `challenges/${challengeId}`);
+    // Store betting challenge in separate path from chat challenges for security
+    // Betting challenges (PAID) use 'bettingChallenges/' path
+    const challengeRef = ref(database, `bettingChallenges/${challengeId}`);
     await set(challengeRef, challengeData);
 
     // Emit realtime to both players IMMEDIATELY after DB write (before indexes)
@@ -272,8 +314,8 @@ const acceptChallenge = async (req, res) => {
     const started = Date.now();
     log.info("accept:start", { rid, challengeId, challengedId });
 
-    // Get challenge data
-    const challengeRef = ref(database, `challenges/${challengeId}`);
+    // Get betting challenge data (separate path from chat challenges)
+    const challengeRef = ref(database, `bettingChallenges/${challengeId}`);
     const challengeSnap = await get(challengeRef);
 
     if (!challengeSnap.exists()) {
@@ -294,6 +336,48 @@ const acceptChallenge = async (req, res) => {
     if (Date.now() > challengeData.expiresAt) {
       return res.status(400).json({ error: "Challenge has expired" });
     }
+
+    // Check wallet balance and move to escrow for challenged user
+    const { addWalletTransaction } = require("../controllers/walletController");
+    const challengedUserRef = ref(database, `users/${challengedId}`);
+    const challengedUserSnap = await get(challengedUserRef);
+    const challengedUser = challengedUserSnap.val();
+
+    if (!challengedUser) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const betAmount = challengeData.betAmount;
+    const challengedWallet = challengedUser.wallet || { amount: 0, escrowBalance: 0 };
+    const challengedBalance = challengedWallet.amount || 0;
+    const challengedEscrow = challengedWallet.escrowBalance || 0;
+
+    if (challengedBalance < betAmount) {
+      return res.status(400).json({
+        error: "Insufficient wallet balance",
+        balance: challengedBalance,
+        required: betAmount,
+      });
+    }
+
+    // Deduct from wallet and add to escrow for challenged user
+    const newChallengedBalance = challengedBalance - betAmount;
+    const newChallengedEscrow = challengedEscrow + betAmount;
+
+    await update(challengedUserRef, {
+      "wallet/amount": newChallengedBalance,
+      "wallet/escrowBalance": newChallengedEscrow,
+      "wallet/updatedAt": new Date().toISOString(),
+    });
+
+    // Add transaction record for challenged user
+    await addWalletTransaction(
+      challengedId,
+      -betAmount,
+      "escrow",
+      `Challenge escrow: ${challengeId}`,
+      { challengeId, type: "challenge_accepted" }
+    );
 
     // Update challenge status - MUST complete before response
     const acceptedAt = Date.now();
@@ -370,8 +454,8 @@ const rejectChallenge = async (req, res) => {
     const started = Date.now();
     log.info("reject:start", { rid, challengeId, challengedId });
 
-    // Get challenge data
-    const challengeRef = ref(database, `challenges/${challengeId}`);
+    // Get betting challenge data (separate path from chat challenges)
+    const challengeRef = ref(database, `bettingChallenges/${challengeId}`);
     const challengeSnap = await get(challengeRef);
 
     if (!challengeSnap.exists()) {
@@ -456,8 +540,8 @@ const cancelChallenge = async (req, res) => {
     const started = Date.now();
     log.info("cancel:start", { rid, challengeId, challengerId });
 
-    // Get challenge data
-    const challengeRef = ref(database, `challenges/${challengeId}`);
+    // Get betting challenge data (separate path from chat challenges)
+    const challengeRef = ref(database, `bettingChallenges/${challengeId}`);
     const challengeSnap = await get(challengeRef);
 
     if (!challengeSnap.exists()) {
@@ -547,8 +631,8 @@ const startGameSession = async (req, res) => {
       return res.status(400).json({ error: "Challenge ID is required" });
     }
 
-    // Get challenge data
-    const challengeRef = ref(database, `challenges/${challengeId}`);
+    // Get betting challenge data (separate path from chat challenges)
+    const challengeRef = ref(database, `bettingChallenges/${challengeId}`);
     const challengeSnap = await get(challengeRef);
 
     if (!challengeSnap.exists()) {
@@ -692,8 +776,8 @@ const submitChallengeScore = async (req, res) => {
       sessionAge: Date.now() - sessionData.createdAt,
     });
 
-    // Get challenge data
-    const challengeRef = ref(database, `challenges/${challengeId}`);
+    // Get betting challenge data (separate path from chat challenges)
+    const challengeRef = ref(database, `bettingChallenges/${challengeId}`);
     const challengeSnap = await get(challengeRef);
 
     if (!challengeSnap.exists()) {
@@ -992,7 +1076,7 @@ const getChallengeHistory = async (req, res) => {
     const challengePromises = challengesToFetch.map(async (challengeId) => {
       const challengeFetchStart = Date.now();
       try {
-        const challengeRef = ref(database, `challenges/${challengeId}`);
+        const challengeRef = ref(database, `bettingChallenges/${challengeId}`);
         
         // Add timeout to prevent hanging
         const timeoutPromise = new Promise((_, reject) =>
@@ -1015,7 +1099,7 @@ const getChallengeHistory = async (req, res) => {
         // Fetch interactions separately (they may not be in the main snapshot)
         let interactionsData = null;
         try {
-          const interactionsRef = ref(database, `challenges/${challengeId}/interactions`);
+          const interactionsRef = ref(database, `bettingChallenges/${challengeId}/interactions`);
           const interactionsSnap = await get(interactionsRef);
           if (interactionsSnap.exists()) {
             interactionsData = interactionsSnap.val();
@@ -1372,7 +1456,7 @@ const getChallengeDetails = async (req, res) => {
     const { challengeId } = req.params;
     const userId = req.user.uid;
 
-    const challengeRef = ref(database, `challenges/${challengeId}`);
+    const challengeRef = ref(database, `bettingChallenges/${challengeId}`);
     const challengeSnap = await get(challengeRef);
 
     if (!challengeSnap.exists()) {

@@ -112,7 +112,7 @@ const emitChallengeCompleted = (challengerId, challengedId, challengeData) => {
 const emitChallengeReaction = (challengeId, userId, reaction, reactionData) => {
   // Use opponentId from reactionData if available (optimized path)
   const opponentId = reactionData.opponentId;
-  
+
   if (opponentId) {
     // Fast path: opponentId already provided
     relayEmit("/emit/challenge-reaction", {
@@ -167,7 +167,7 @@ const emitChallengeReaction = (challengeId, userId, reaction, reactionData) => {
 const emitChallengeMessage = (challengeId, userId, message, messageData) => {
   // Use opponentId from messageData if available (optimized path)
   const opponentId = messageData.opponentId;
-  
+
   if (opponentId) {
     // Fast path: opponentId already provided
     relayEmit("/emit/challenge-message", {
@@ -219,6 +219,73 @@ const emitChallengeMessage = (challengeId, userId, message, messageData) => {
     });
 };
 
+// Chat event emitters
+const emitChatTyping = (chatId, chatType, userId, userName, isTyping) => {
+  relayEmit("/emit/chat-typing", {
+    chatId,
+    chatType,
+    userId,
+    userName,
+    isTyping,
+  });
+};
+
+const emitChatGamePlaying = (
+  chatId,
+  chatType,
+  userId,
+  userName,
+  gameTitle,
+  gameId,
+  isPlaying
+) => {
+  relayEmit("/emit/chat-game-playing", {
+    chatId,
+    chatType,
+    userId,
+    userName,
+    gameTitle,
+    gameId,
+    isPlaying,
+  });
+};
+
+const emitChatGameScore = (
+  chatId,
+  chatType,
+  userId,
+  userName,
+  gameTitle,
+  score
+) => {
+  relayEmit("/emit/chat-game-score", {
+    chatId,
+    chatType,
+    userId,
+    userName,
+    gameTitle,
+    score,
+  });
+};
+
+const emitMessageRead = (chatId, chatType, messageId, userId) => {
+  relayEmit("/emit/chat-message-read", {
+    chatId,
+    chatType,
+    messageId,
+    userId,
+  });
+};
+
+const emitMessageDelivered = (chatId, chatType, messageId, userId) => {
+  relayEmit("/emit/chat-message-delivered", {
+    chatId,
+    chatType,
+    messageId,
+    userId,
+  });
+};
+
 module.exports = {
   emitChallengeCreated,
   emitChallengeAccepted,
@@ -229,4 +296,9 @@ module.exports = {
   emitChallengeCompleted,
   emitChallengeReaction,
   emitChallengeMessage,
+  emitChatTyping,
+  emitChatGamePlaying,
+  emitChatGameScore,
+  emitMessageRead,
+  emitMessageDelivered,
 };
